@@ -1,0 +1,56 @@
+:root {
+  --bg: #fbfbfa; --fg: #1d1d1f; --muted: #6b6b70; --line: #e4e4e2; --card: #fff;
+  --accent: #3b5bdb; --safe: #2e7d32; --risky: #b26a00; --breaking: #c62828;
+  font: 15px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151517; --fg: #e8e8ea; --muted: #8d8d94; --line: #2a2a2e; --card: #1c1c1f; --accent: #8ca0ff; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; }
+header { display: flex; gap: 1.5rem; align-items: center; padding: 0.6rem 1.5rem; border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; letter-spacing: 0.04em; color: var(--fg); }
+nav { display: flex; gap: 0.9rem; flex-wrap: wrap; align-items: center; }
+.sep { width: 1px; height: 1em; background: var(--line); }
+main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
+h1 { margin-top: 0; }
+.muted { color: var(--muted); font-weight: normal; }
+.err { color: var(--breaking); font-family: ui-monospace, monospace; font-size: 0.9em; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 0 1rem 0.5rem; }
+
+/* three-column reference: nav | operation | response */
+.spec { display: grid; grid-template-columns: 260px 1fr; gap: 1.5rem; }
+.op { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; }
+.opnav { border-right: 1px solid var(--line); padding-right: 1rem; position: sticky; top: 0; align-self: start; max-height: 100vh; overflow: auto; }
+.opnav a { display: block; padding: 0.15rem 0; font-size: 0.9em; color: var(--fg); font-family: ui-monospace, monospace; }
+.opnav h3 { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 1rem 0 0.3rem; }
+.opside { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 0 1rem 1rem; align-self: start; }
+@media (max-width: 900px) { .spec, .op { grid-template-columns: 1fr; } .opnav { position: static; border: 0; } }
+
+.m { display: inline-block; min-width: 3.6em; font: 700 0.75em ui-monospace, monospace; }
+.m-GET { color: #2b8a3e; } .m-POST { color: #1c7ed6; } .m-PUT, .m-PATCH { color: #e67700; } .m-DELETE { color: #c92a2a; }
+
+ul.schema, ul.schema ul { list-style: none; padding-left: 1rem; margin: 0.2rem 0; border-left: 1px solid var(--line); }
+ul.schema { padding-left: 0; border: 0; }
+.fname { font-family: ui-monospace, monospace; font-weight: 600; }
+.ftype { color: var(--muted); font-size: 0.85em; }
+.enum { font-size: 0.8em; color: var(--accent); }
+.fdesc { color: var(--muted); font-size: 0.85em; }
+.req { color: var(--breaking); }
+
+table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1.5rem; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.revs { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+.revs input { font: inherit; padding: 0.2rem 0.4rem; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; width: 12em; }
+.diagram { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 1rem; overflow-x: auto; margin-bottom: 1rem; }
+.diagram svg { max-width: 100%; height: auto; }
+.badge { display: inline-block; padding: 0 0.5em; border-radius: 999px; font-size: 0.8em; font-weight: 600; color: #fff; }
+.v-safe { background: var(--safe); } .v-risky { background: var(--risky); } .v-breaking { background: var(--breaking); }
+.finding { font-size: 0.85em; color: var(--muted); margin-top: 0.2rem; }
+.lvl { font: 600 0.75em ui-monospace, monospace; }
+.lvl-error { color: var(--breaking); } .lvl-warning { color: var(--risky); } .lvl-info { color: var(--muted); }

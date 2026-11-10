@@ -1,0 +1,2 @@
+# Refund lookup
+support -> payments: getCharge {status}

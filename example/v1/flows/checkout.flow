@@ -1,0 +1,5 @@
+# Checkout
+// web places the order, orders charges the card, web polls for status
+web -> orders: createOrder {id, status}
+orders -> payments: chargeCard {chargeId}
+web -> orders: getOrder {status, total.amount}

@@ -1,0 +1,44 @@
+openapi: 3.0.3
+info: {title: Payments, version: 2.1.0}
+paths:
+  /charges:
+    post:
+      operationId: chargeCard
+      tags: [charges]
+      summary: Charge a card for an order.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId, amount]
+              properties:
+                orderId: {type: string}
+                amount: {type: integer}
+      responses:
+        "201":
+          description: Charged
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Charge"}
+  /charges/{chargeId}:
+    get:
+      operationId: getCharge
+      tags: [charges]
+      parameters:
+        - {name: chargeId, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Charge"}
+components:
+  schemas:
+    Charge:
+      type: object
+      required: [chargeId, status]
+      properties:
+        chargeId: {type: string}
+        status: {type: string, enum: [succeeded, failed, refunded]}

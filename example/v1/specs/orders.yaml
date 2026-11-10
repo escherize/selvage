@@ -1,0 +1,49 @@
+openapi: 3.0.3
+info: {title: Orders, version: 1.4.0}
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      tags: [orders]
+      summary: Create an order from a cart.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cartId]
+              properties:
+                cartId: {type: string}
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Order"}
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      tags: [orders]
+      summary: Fetch one order.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Order"}
+components:
+  schemas:
+    Order:
+      type: object
+      required: [id, status, total]
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [pending, paid, shipped]}
+        total:
+          type: object
+          properties:
+            amount: {type: integer, description: Minor units (cents).}
+            currency: {type: string, description: ISO 4217 code.}

@@ -1,0 +1,33 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>selvage</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/htmx.min.js"></script>
+</head>
+<body hx-boost="true">
+<header>
+  <a class="brand" href="/">selvage</a>
+  <nav>
+    {{with .Snap}}{{range .Services}}<a href="/spec/{{.}}">{{.}}</a>{{end}}
+    <span class="sep"></span>
+    {{range .Flows}}<a href="/flow/{{.Name}}">{{.Title}}</a>{{end}}{{end}}
+    <span class="sep"></span>
+    <a href="/diff">diff</a>
+  </nav>
+</header>
+<main>{{template "content" .}}</main>
+</body>
+</html>{{end}}
+
+{{define "schema"}}<li>
+  <span class="fname">{{.Name}}</span>{{if .Required}}<span class="req">*</span>{{end}}
+  <span class="ftype">{{.Type}}</span>
+  {{if .Enum}}<span class="enum">{{range $i, $e := .Enum}}{{if $i}} | {{end}}{{$e}}{{end}}</span>{{end}}
+  {{if .Desc}}<div class="fdesc">{{.Desc}}</div>{{end}}
+  {{if .Children}}<ul>{{range .Children}}{{template "schema" .}}{{end}}</ul>{{end}}
+</li>{{end}}
+
+{{define "errs"}}{{range .}}<p class="err">{{.}}</p>{{end}}{{end}}

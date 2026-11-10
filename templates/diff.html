@@ -1,0 +1,40 @@
+{{define "content"}}
+<h1>Compatibility</h1>
+<form class="revs" hx-get="/diff" hx-target="#results" hx-push-url="true">
+  base <input name="base" value="{{.BaseRev}}">
+  head <input name="head" value="{{.HeadRev}}" placeholder="working tree">
+  <button>compare</button>
+</form>
+<div id="results">{{template "results" .}}</div>
+{{end}}
+
+{{define "results"}}
+{{with .Err}}<p class="err">{{.}}</p>{{end}}
+{{with .C}}
+{{template "errs" .Head.Errs}}
+<p class="summary"><span class="badge v-{{$.Worst}}">{{$.Worst}}</span>
+  {{len .Edges}} flow edges checked, {{.Base.Label}} &rarr; {{.Head.Label}}</p>
+
+<h2>Flow edges</h2>
+<table class="steps">
+  <tr><th>flow</th><th>call</th><th>verdict</th></tr>
+  {{range .Edges}}
+  <tr>
+    <td><a href="/flow/{{.Flow}}?base={{$.BaseRev}}&head={{$.HeadRev}}">{{.Flow}}</a><span class="muted">:{{.Step.Line}}</span></td>
+    <td>{{.Step.Consumer}} &rarr; {{.Step.Provider}}.{{.Step.OperationID}}</td>
+    <td><span class="badge v-{{.Verdict}}">{{.Verdict}}</span>{{range .Findings}}<div class="finding">{{.Text}}</div>{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+
+<h2>Spec changes <span class="muted">(oasdiff)</span></h2>
+{{if .Changes}}
+<table class="changes">
+  <tr><th>service</th><th>level</th><th>operation</th><th>change</th></tr>
+  {{range .Changes}}
+  <tr><td>{{.Service}}</td><td><span class="lvl lvl-{{.Level}}">{{.Level}}</span></td><td><code>{{.Path}}</code></td><td>{{.Text}}</td></tr>
+  {{end}}
+</table>
+{{else}}<p class="muted">No spec changes.</p>{{end}}
+{{end}}
+{{end}}

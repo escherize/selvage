@@ -1,0 +1,16 @@
+{{define "content"}}
+<h1>Contracts</h1>
+{{with .Snap}}
+{{template "errs" .Errs}}
+<section class="cards">
+  <div class="card">
+    <h2>Services</h2>
+    <ul>{{range .Services}}<li><a href="/spec/{{.}}">{{.}}</a></li>{{end}}</ul>
+  </div>
+  <div class="card">
+    <h2>Flows</h2>
+    <ul>{{range .Flows}}<li><a href="/flow/{{.Name}}">{{.Title}}</a> <span class="muted">{{len .Steps}} steps</span></li>{{end}}</ul>
+  </div>
+</section>
+{{end}}
+{{end}}

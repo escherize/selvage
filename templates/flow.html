@@ -1,0 +1,29 @@
+{{define "content"}}
+<h1>{{.Flow.Title}}</h1>
+<form class="revs" action="/flow/{{.Flow.Name}}">
+  base <input name="base" value="{{.BaseRev}}">
+  head <input name="head" value="{{.HeadRev}}" placeholder="working tree">
+  <button>compare</button>
+</form>
+{{with .CompareErr}}<p class="err">compatibility not checked: {{.}}</p>{{end}}
+{{with .DiagramErr}}<p class="err">diagram: {{.}}</p>{{end}}
+<div class="diagram">{{.SVG}}</div>
+<table class="steps">
+  <tr><th>line</th><th>call</th><th>reads</th><th>verdict</th></tr>
+  {{if .Results}}{{range .Results}}
+  <tr>
+    <td class="muted">{{.Step.Line}}</td>
+    <td>{{.Step.Consumer}} &rarr; <a href="/spec/{{.Step.Provider}}/op/{{.Step.OperationID}}">{{.Step.Provider}}.{{.Step.OperationID}}</a></td>
+    <td>{{range .Step.Fields}}<code>{{.}}</code> {{end}}</td>
+    <td><span class="badge v-{{.Verdict}}">{{.Verdict}}</span>{{range .Findings}}<div class="finding">{{.Text}}</div>{{end}}</td>
+  </tr>
+  {{end}}{{else}}{{range .Flow.Steps}}
+  <tr>
+    <td class="muted">{{.Line}}</td>
+    <td>{{.Consumer}} &rarr; <a href="/spec/{{.Provider}}/op/{{.OperationID}}">{{.Provider}}.{{.OperationID}}</a></td>
+    <td>{{range .Fields}}<code>{{.}}</code> {{end}}</td>
+    <td class="muted">-</td>
+  </tr>
+  {{end}}{{end}}
+</table>
+{{end}}
