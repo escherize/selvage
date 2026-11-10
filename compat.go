@@ -135,8 +135,15 @@ func ParseRules(data []byte) (map[string]Rule, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	known := map[string]bool{}
+	for _, r := range checker.GetAllRules() {
+		known[r.Id] = true
+	}
 	out := maps.Clone(DefaultRules)
 	for id, r := range cfg.Rules {
+		if !known[id] { // a typo here would silently stop a rule from applying
+			return nil, fmt.Errorf("rule %s: not an oasdiff check id (see `oasdiff checks`)", id)
+		}
 		switch r {
 		case RuleOasdiff, RuleBreaking, RuleRisky, RuleSafe, RuleReads:
 			out[id] = r
@@ -173,14 +180,22 @@ func classify(c checker.Change, s Step, rules map[string]Rule) Verdict {
 	return Safe
 }
 
-// readsAny reports whether any change argument is a property path this step
-// reads. oasdiff writes paths with "/" ("total/currency"); flows use ".".
+// readsAny reports whether the step reads a property path named in the change
+// args, or an ancestor of it (reading "total" passes "total.currency" along).
+// oasdiff writes paths with "/" ("total/currency"); flows use ".".
 // ponytail: matches every string arg, so a value arg equal to a read field name
 // also counts; use per-id arg positions if that ever misfires.
 func readsAny(s Step, args []any) bool {
 	for _, a := range args {
-		if p, ok := a.(string); ok && contains(s.Fields, strings.ReplaceAll(p, "/", ".")) {
-			return true
+		p, ok := a.(string)
+		if !ok {
+			continue
+		}
+		p = strings.ReplaceAll(p, "/", ".")
+		for _, f := range s.Fields {
+			if p == f || strings.HasPrefix(p, f+".") {
+				return true
+			}
 		}
 	}
 	return false

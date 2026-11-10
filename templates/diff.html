@@ -1,10 +1,6 @@
 {{define "content"}}
 <h1>Compatibility</h1>
-<form class="revs" hx-get="/diff" hx-target="#results" hx-push-url="true">
-  base <input name="base" value="{{.BaseRev}}">
-  head <input name="head" value="{{.HeadRev}}" placeholder="working tree">
-  <button>compare</button>
-</form>
+<form class="revs" hx-get="/diff" hx-target="#results" hx-push-url="true">{{template "refs" .}}</form>
 <div id="results">{{template "results" .}}</div>
 {{end}}
 
@@ -20,7 +16,7 @@
   <tr><th>flow</th><th>call</th><th>verdict</th></tr>
   {{range .Edges}}
   <tr>
-    <td><a href="/flow/{{.Flow}}?base={{$.BaseRev}}&head={{$.HeadRev}}">{{.Flow}}</a><span class="muted">:{{.Step.Line}}</span></td>
+    <td><a href="/flow/{{.Flow}}?{{$.Query}}">{{.Flow}}</a><span class="muted">:{{.Step.Line}}</span></td>
     <td>{{.Step.Consumer}} &rarr; {{.Step.Provider}}.{{.Step.OperationID}}</td>
     <td><span class="badge v-{{.Verdict}}">{{.Verdict}}</span>{{range .Findings}}<div class="finding">{{.Text}}</div>{{end}}</td>
   </tr>

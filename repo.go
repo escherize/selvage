@@ -15,22 +15,24 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Snapshot is every spec and flow in a contracts repo at one revision.
-// Layout: specs/<service>[.openapi].{yaml,yml,json}, flows/<name>.flow, optional selvage.yaml.
+// Layout says where a contracts repo keeps its files. Paths are relative to Repo.
+type Layout struct {
+	Repo   string // git repo root (or plain directory, working tree only)
+	Specs  string // OpenAPI files: <service>[.openapi].{yaml,yml,json}; other JSON/YAML is ignored
+	Flows  string // <name>.flow files
+	Config string // optional selvage.yaml
+}
+
+// Snapshot is every spec and flow in a contracts repo at one Ref.
 type Snapshot struct {
-	Rev   string // "" means the working tree
+	Ref   Ref
 	Specs map[string]*load.SpecInfo
 	Flows []Flow
-	Rules map[string]Rule // from selvage.yaml merged over DefaultRules
+	Rules map[string]Rule // Config merged over DefaultRules
 	Errs  []string        // files that failed to parse; shown in the UI, not fatal
 }
 
-func (s Snapshot) Label() string {
-	if s.Rev == "" {
-		return "working tree"
-	}
-	return s.Rev
-}
+func (s Snapshot) Label() string { return s.Ref.Label() }
 
 func (s Snapshot) Services() []string {
 	names := make([]string, 0, len(s.Specs))
@@ -52,65 +54,91 @@ func (s Snapshot) Flow(name string) (Flow, bool) {
 
 // ponytail: reloads from disk/git on every request so edits show up live.
 // Ceiling: a few hundred specs per request; cache by resolved commit SHA if slow.
-func LoadSnapshot(repo, rev string) (Snapshot, error) {
+func LoadSnapshot(l Layout, ref Ref) (Snapshot, error) {
+	repo, rev := l.Repo, ref.Rev
 	if strings.HasPrefix(rev, "-") { // rev comes from a query string; keep it out of git's option parser
 		return Snapshot{}, fmt.Errorf("invalid revision %q", rev)
 	}
-	snap := Snapshot{Rev: rev, Specs: map[string]*load.SpecInfo{}, Rules: DefaultRules}
-	if ok, err := exists(repo, rev, "selvage.yaml"); err != nil {
+	snap := Snapshot{Ref: ref, Specs: map[string]*load.SpecInfo{}, Rules: DefaultRules}
+	if ok, err := exists(repo, rev, l.Config); err != nil {
 		return Snapshot{}, err
 	} else if ok {
-		data, err := readFile(repo, rev, "selvage.yaml")
+		data, err := readFile(repo, rev, l.Config)
 		if err != nil {
 			return Snapshot{}, err
 		}
 		if snap.Rules, err = ParseRules(data); err != nil {
-			snap.Errs = append(snap.Errs, "selvage.yaml: "+err.Error())
+			snap.Errs = append(snap.Errs, l.Config+": "+err.Error())
 			snap.Rules = DefaultRules
 		}
 	}
-	for _, dir := range []string{"specs", "flows"} {
-		files, err := listFiles(repo, rev, dir)
+
+	specFiles, err := listFiles(repo, rev, l.Specs)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	for _, file := range specFiles {
+		ext := path.Ext(file)
+		if ext != ".yaml" && ext != ".yml" && ext != ".json" {
+			continue
+		}
+		data, err := readFile(repo, rev, file)
 		if err != nil {
 			return Snapshot{}, err
 		}
-		for _, file := range files {
-			data, err := readFile(repo, rev, file)
-			if err != nil {
-				return Snapshot{}, err
-			}
-			ext := path.Ext(file)
-			stem := strings.TrimSuffix(path.Base(file), ext)
-			switch {
-			case dir == "specs" && (ext == ".yaml" || ext == ".yml" || ext == ".json"):
-				if !isOpenAPI(data) {
-					continue // e.g. a JSON Schema that a spec $refs
-				}
-				spec, err := loadSpec(repo, rev, file, data)
-				if err != nil {
-					snap.Errs = append(snap.Errs, fmt.Sprintf("%s: %v", file, err))
-					continue
-				}
-				// "parent.openapi.yaml" -> service "parent"
-				snap.Specs[strings.TrimSuffix(stem, ".openapi")] = &load.SpecInfo{Url: file, Spec: spec, Version: spec.Info.Version}
-			case dir == "flows" && ext == ".flow":
-				f, err := ParseFlow(stem, string(data))
-				if err != nil {
-					snap.Errs = append(snap.Errs, err.Error())
-					continue
-				}
-				snap.Flows = append(snap.Flows, f)
-			}
+		isSpec, err := isOpenAPI(data)
+		if err != nil {
+			snap.Errs = append(snap.Errs, fmt.Sprintf("%s: %v", file, err))
+			continue
 		}
+		if !isSpec {
+			continue // e.g. a JSON Schema that a spec $refs
+		}
+		spec, err := loadSpec(repo, rev, file, data)
+		if err != nil {
+			snap.Errs = append(snap.Errs, fmt.Sprintf("%s: %v", file, err))
+			continue
+		}
+		applyView(spec, ref.View)
+		// "parent.openapi.yaml" -> service "parent"
+		name := strings.TrimSuffix(strings.TrimSuffix(path.Base(file), ext), ".openapi")
+		if prev, dup := snap.Specs[name]; dup {
+			snap.Errs = append(snap.Errs, fmt.Sprintf("%s: service %q is also defined by %s", file, name, prev.Url))
+			continue
+		}
+		snap.Specs[name] = &load.SpecInfo{Url: file, Spec: spec, Version: spec.Info.Version}
+	}
+
+	flowFiles, err := listFiles(repo, rev, l.Flows)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	for _, file := range flowFiles {
+		if path.Ext(file) != ".flow" {
+			continue
+		}
+		data, err := readFile(repo, rev, file)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		f, err := ParseFlow(strings.TrimSuffix(path.Base(file), ".flow"), string(data))
+		if err != nil {
+			snap.Errs = append(snap.Errs, err.Error())
+			continue
+		}
+		snap.Flows = append(snap.Flows, f)
 	}
 	return snap, nil
 }
 
-func isOpenAPI(data []byte) bool {
+func isOpenAPI(data []byte) (bool, error) {
 	var doc struct {
 		OpenAPI string `yaml:"openapi"`
 	}
-	return yaml.Unmarshal(data, &doc) == nil && doc.OpenAPI != "" // YAML parses JSON too
+	if err := yaml.Unmarshal(data, &doc); err != nil { // YAML parses JSON too
+		return false, err
+	}
+	return doc.OpenAPI != "", nil
 }
 
 // loadSpec resolves external $refs against the same revision, relative to the spec.
@@ -119,8 +147,15 @@ func loadSpec(repo, rev, file string, data []byte) (*openapi3.T, error) {
 	loader.IsExternalRefsAllowed = true
 	loader.ReadFromURIFunc = func(_ *openapi3.Loader, u *url.URL) ([]byte, error) {
 		p := path.Clean(u.Path)
-		if u.Host != "" || path.IsAbs(p) || strings.HasPrefix(p, "..") {
+		if u.Host != "" || path.IsAbs(p) || p == ".." || strings.HasPrefix(p, "../") || p == ".git" || strings.HasPrefix(p, ".git/") {
 			return nil, fmt.Errorf("$ref %q must be a relative path inside the repo", u.String())
+		}
+		if rev == "" { // the working tree can hold symlinks; git revs store link text, not targets
+			root, err1 := filepath.EvalSymlinks(repo)
+			real, err2 := filepath.EvalSymlinks(filepath.Join(repo, p))
+			if err1 != nil || err2 != nil || !strings.HasPrefix(real, root+string(filepath.Separator)) {
+				return nil, fmt.Errorf("$ref %q must resolve inside the repo", u.String())
+			}
 		}
 		return readFile(repo, rev, p)
 	}
@@ -154,7 +189,7 @@ func listFiles(repo, rev, dir string) ([]string, error) {
 		}
 		var out []string
 		for _, e := range entries {
-			if !e.IsDir() {
+			if !e.IsDir() && e.Type()&os.ModeSymlink == 0 { // symlinks could point outside the repo
 				out = append(out, dir+"/"+e.Name())
 			}
 		}
@@ -171,7 +206,8 @@ func readFile(repo, rev, file string) ([]byte, error) {
 	if rev == "" {
 		return os.ReadFile(filepath.Join(repo, file))
 	}
-	out, err := git(repo, "show", rev+":"+file)
+	// "./" makes the path relative to -repo, like ls-tree's output, not to the git toplevel.
+	out, err := git(repo, "show", rev+":./"+file)
 	return []byte(out), err
 }
 

@@ -31,3 +31,11 @@
 </li>{{end}}
 
 {{define "errs"}}{{range .}}<p class="err">{{.}}</p>{{end}}{{end}}
+
+{{define "refs"}}
+  base <input name="base" value="{{.Base.Rev}}">
+  <input name="base_view" value="{{.Base.ViewString}}" placeholder="all x-status" class="view">
+  head <input name="head" value="{{.Head.Rev}}" placeholder="working tree">
+  <input name="head_view" value="{{.Head.ViewString}}" placeholder="all x-status" class="view">
+  <button>compare</button>
+{{end}}

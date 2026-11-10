@@ -54,3 +54,4 @@ th { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.08em; color
 .finding { font-size: 0.85em; color: var(--muted); margin-top: 0.2rem; }
 .lvl { font: 600 0.75em ui-monospace, monospace; }
 .lvl-error { color: var(--breaking); } .lvl-warning { color: var(--risky); } .lvl-info { color: var(--muted); }
+.revs input.view { width: 10em; font-size: 0.85em; }

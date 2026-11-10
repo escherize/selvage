@@ -1,10 +1,6 @@
 {{define "content"}}
 <h1>{{.Flow.Title}}</h1>
-<form class="revs" action="/flow/{{.Flow.Name}}">
-  base <input name="base" value="{{.BaseRev}}">
-  head <input name="head" value="{{.HeadRev}}" placeholder="working tree">
-  <button>compare</button>
-</form>
+<form class="revs" action="/flow/{{.Flow.Name}}">{{template "refs" .}}</form>
 {{with .CompareErr}}<p class="err">compatibility not checked: {{.}}</p>{{end}}
 {{with .DiagramErr}}<p class="err">diagram: {{.}}</p>{{end}}
 <div class="diagram">{{.SVG}}</div>

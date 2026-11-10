@@ -1,3 +1,5 @@
+![selvage](docs/header.png)
+
 # selvage
 
 A viewer for API contracts across services. It reads OpenAPI specs and plaintext flow files from a git repo and renders an endpoint reference, sequence diagrams and a compatibility report. A CI gate fails when a spec change breaks a documented flow.
@@ -59,6 +61,31 @@ go run . check -repo DIR -base origin/main      # exit 1 on a breaking edge
 ```
 
 `head` defaults to the working tree. In the UI, set `base`/`head` to any git revision.
+
+Contracts that live elsewhere in a repo: `-specs`, `-flows` and `-config` take paths relative to `-repo`:
+
+```
+selvage check -repo . -specs contracts/workspaces -flows contracts/workspaces/flows -base origin/master
+```
+
+## Views: diffing work that hasn't merged
+
+A contract can describe more than one state: what is on the main branch, what open PRs change, what is only proposed. Tag elements (operations, responses, response headers, schema properties, `oneOf`/`anyOf`/`allOf` branches) with `x-status`, then compare views:
+
+```
+selvage check -repo . -base HEAD -base-view master -head-view master,hardening
+```
+
+A view keeps untagged elements and elements whose `x-status` is in the list. To model a shape that an open PR replaces, tag the old shape `x-removed-in` with the new status:
+
+```yaml
+schema:
+  oneOf:
+    - {x-status: master, x-removed-in: hardening, properties: {name: {type: string}}}
+    - {x-status: hardening, properties: {databases: {type: array}}}
+```
+
+A consumer that reads `name` is then breaking in the `master,hardening` view. In the UI, the `base`/`head` view boxes take the same lists.
 
 ## Demo
 

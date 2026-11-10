@@ -17,9 +17,13 @@ var assets embed.FS
 
 const usage = `selvage - API contract viewer
 
-  selvage serve -repo DIR [-addr :8080]     browse specs, flows and diffs
-  selvage check -repo DIR -base REV [-head REV]
-                                            exit 1 if any flow edge breaks (head defaults to working tree)`
+  selvage serve [layout flags] [-addr :8080]
+      browse specs, flows and diffs
+  selvage check [layout flags] -base REV [-base-view V] [-head REV] [-head-view V]
+      exit 1 if any flow edge breaks; head defaults to the working tree
+
+  layout flags: -repo DIR -specs DIR -flows DIR -config FILE (paths relative to -repo)
+  views: a comma list of x-status values to keep, e.g. -head-view master,hardening`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -27,18 +31,32 @@ func main() {
 		os.Exit(2)
 	}
 	fl := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
-	repo := fl.String("repo", ".", "contracts repo (specs/ and flows/)")
-	addr := fl.String("addr", ":8080", "listen address")
+	var l Layout
+	fl.StringVar(&l.Repo, "repo", ".", "contracts repo root")
+	fl.StringVar(&l.Specs, "specs", "specs", "OpenAPI directory, relative to -repo")
+	fl.StringVar(&l.Flows, "flows", "flows", "flow directory, relative to -repo")
+	fl.StringVar(&l.Config, "config", "selvage.yaml", "rules file, relative to -repo (optional)")
+	addr := fl.String("addr", "127.0.0.1:8080", "listen address (specs are readable by anyone who can reach it)")
 	base := fl.String("base", "", "base git revision")
+	baseView := fl.String("base-view", "", "x-status values to keep in base (empty = all)")
 	head := fl.String("head", "", "head git revision (empty = working tree)")
+	headView := fl.String("head-view", "", "x-status values to keep in head (empty = all)")
 	fl.Parse(os.Args[2:])
+	if l.Repo == "" || l.Specs == "" || l.Flows == "" || l.Config == "" {
+		fmt.Fprintln(os.Stderr, "-repo, -specs, -flows and -config must not be empty")
+		os.Exit(2)
+	}
 
 	switch os.Args[1] {
 	case "serve":
-		log.Printf("selvage serving %s on %s", *repo, *addr)
-		log.Fatal(http.ListenAndServe(*addr, routes(*repo)))
+		log.Printf("selvage serving %s (specs %s, flows %s) on %s", l.Repo, l.Specs, l.Flows, *addr)
+		log.Fatal(http.ListenAndServe(*addr, routes(l)))
 	case "check":
-		os.Exit(check(*repo, *base, *head))
+		if *base == "" {
+			fmt.Fprintln(os.Stderr, "check: -base is required")
+			os.Exit(2)
+		}
+		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView)))
 	default:
 		fmt.Println(usage)
 		os.Exit(2)
@@ -55,13 +73,13 @@ type changeView struct {
 	Service, Level, Op, Path, Text string
 }
 
-// compare loads both revisions, diffs every spec and evaluates every flow edge.
-func compare(repo, baseRev, headRev string) (comparison, error) {
-	base, err := LoadSnapshot(repo, baseRev)
+// compare loads both refs, diffs every spec and evaluates every flow edge.
+func compare(l Layout, baseRef, headRef Ref) (comparison, error) {
+	base, err := LoadSnapshot(l, baseRef)
 	if err != nil {
 		return comparison{}, err
 	}
-	head, err := LoadSnapshot(repo, headRev)
+	head, err := LoadSnapshot(l, headRef)
 	if err != nil {
 		return comparison{}, err
 	}
@@ -80,18 +98,19 @@ func compare(repo, baseRev, headRev string) (comparison, error) {
 	return c, nil
 }
 
-func check(repo, baseRev, headRev string) int {
-	if baseRev == "" {
-		fmt.Fprintln(os.Stderr, "check: -base is required")
-		return 2
-	}
-	c, err := compare(repo, baseRev, headRev)
+func check(l Layout, base, head Ref) int {
+	c, err := compare(l, base, head)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
 	for _, e := range c.Head.Errs {
 		fmt.Printf("ERROR    %s\n", e)
+	}
+	// A mistyped -specs or -flows finds nothing; that must not pass the gate.
+	if len(c.Head.Specs) == 0 || len(c.Head.Flows) == 0 {
+		fmt.Fprintf(os.Stderr, "check: found %d specs in %s and %d flows in %s at %s\n", len(c.Head.Specs), l.Specs, len(c.Head.Flows), l.Flows, c.Head.Label())
+		return 2
 	}
 	for _, e := range c.Edges {
 		for _, f := range e.Findings {
@@ -144,31 +163,33 @@ func render(w http.ResponseWriter, r *http.Request, page, fragment string, data 
 	}
 }
 
-func revs(r *http.Request) (base, head string) {
-	base, head = r.URL.Query().Get("base"), r.URL.Query().Get("head")
-	if base == "" {
-		base = "HEAD"
+// refs reads base/base_view/head/head_view; base defaults to HEAD.
+func refs(r *http.Request) (base, head Ref) {
+	q := r.URL.Query()
+	b := q.Get("base")
+	if b == "" {
+		b = "HEAD"
 	}
-	return base, head
+	return ParseRef(b, q.Get("base_view")), ParseRef(q.Get("head"), q.Get("head_view"))
 }
 
-func routes(repo string) http.Handler {
+func routes(l Layout) http.Handler {
 	mux := http.NewServeMux()
 	static, _ := fs.Sub(assets, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		snap, err := LoadSnapshot(repo, r.URL.Query().Get("rev"))
+		snap, err := LoadSnapshot(l, ParseRef(r.URL.Query().Get("rev"), r.URL.Query().Get("view")))
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		render(w, r, "index.html", "", map[string]any{"Snap": snap})
+		render(w, r, "index.html", "", map[string]any{"Snap": snap, "Query": template.URL(r.URL.RawQuery)})
 	})
 
 	spec := func(w http.ResponseWriter, r *http.Request) {
-		rev := r.URL.Query().Get("rev")
-		snap, err := LoadSnapshot(repo, rev)
+		ref := ParseRef(r.URL.Query().Get("rev"), r.URL.Query().Get("view"))
+		snap, err := LoadSnapshot(l, ref)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -189,23 +210,23 @@ func routes(repo string) http.Handler {
 			sel = ops[0]
 		}
 		render(w, r, "spec.html", "op", map[string]any{
-			"Snap": snap, "Service": r.PathValue("svc"), "Spec": info.Spec, "Ops": ops, "Sel": sel, "Rev": rev,
+			"Snap": snap, "Service": r.PathValue("svc"), "Spec": info.Spec, "Ops": ops, "Sel": sel, "Ref": ref, "Query": template.URL(r.URL.RawQuery),
 		})
 	}
 	mux.HandleFunc("GET /spec/{svc}", spec)
 	mux.HandleFunc("GET /spec/{svc}/op/{op}", spec)
 
 	mux.HandleFunc("GET /flow/{name}", func(w http.ResponseWriter, r *http.Request) {
-		base, head := revs(r)
-		data := map[string]any{"BaseRev": base, "HeadRev": head}
+		base, head := refs(r)
+		data := map[string]any{"Base": base, "Head": head, "Query": template.URL(r.URL.RawQuery)}
 		// Diagram and verdicts must come from one load of head, or a concurrent
 		// edit can leave them with different step counts.
-		c, cerr := compare(repo, base, head)
+		c, cerr := compare(l, base, head)
 		snap := c.Head
 		if cerr != nil {
 			data["CompareErr"] = cerr.Error() // e.g. not a git repo; still show the diagram
 			var err error
-			if snap, err = LoadSnapshot(repo, head); err != nil {
+			if snap, err = LoadSnapshot(l, head); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
@@ -235,9 +256,9 @@ func routes(repo string) http.Handler {
 	})
 
 	mux.HandleFunc("GET /diff", func(w http.ResponseWriter, r *http.Request) {
-		base, head := revs(r)
-		data := map[string]any{"BaseRev": base, "HeadRev": head}
-		c, err := compare(repo, base, head)
+		base, head := refs(r)
+		data := map[string]any{"Base": base, "Head": head, "Query": template.URL(r.URL.RawQuery)}
+		c, err := compare(l, base, head)
 		if err != nil {
 			data["Err"] = err.Error()
 		} else {

@@ -2,10 +2,11 @@
 <div class="spec">
   <aside class="opnav">
     <h2>{{.Service}} <span class="muted">v{{.Spec.Info.Version}}</span></h2>
-    {{$svc := .Service}}{{$tag := ""}}
+    <p class="muted">{{.Ref.Label}}</p>
+    {{$svc := .Service}}{{$q := .Query}}{{$tag := ""}}
     {{range .Ops}}
       {{if ne .Tag $tag}}{{$tag = .Tag}}<h3>{{.Tag}}</h3>{{end}}
-      <a href="/spec/{{$svc}}/op/{{.ID}}" hx-get="/spec/{{$svc}}/op/{{.ID}}" hx-target="#op" hx-push-url="true">
+      <a href="/spec/{{$svc}}/op/{{.ID}}?{{$q}}" hx-get="/spec/{{$svc}}/op/{{.ID}}?{{$q}}" hx-target="#op" hx-push-url="true">
         <span class="m m-{{.Method}}">{{.Method}}</span> {{.Path}}
       </a>
     {{end}}

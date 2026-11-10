@@ -44,7 +44,7 @@ func TestParseFlowError(t *testing.T) {
 
 func mustLoad(t *testing.T, dir string) Snapshot {
 	t.Helper()
-	s, err := LoadSnapshot(dir, "")
+	s, err := LoadSnapshot(layoutOf(dir), Ref{})
 	if err != nil || len(s.Errs) > 0 {
 		t.Fatalf("load %s: %v %v", dir, err, s.Errs)
 	}
@@ -177,8 +177,15 @@ func TestRules(t *testing.T) {
 	if rules["api-security-added"] != RuleBreaking {
 		t.Error("override dropped a default")
 	}
-	if _, err := ParseRules([]byte("rules:\n  x: maybe\n")); err == nil {
+	if _, err := ParseRules([]byte("rules:\n  api-security-added: maybe\n")); err == nil {
 		t.Error("want error for unknown rule value")
+	}
+	if _, err := ParseRules([]byte("rules:\n  response-property-enum-value-add: breaking\n")); err == nil {
+		t.Error("want error for a mistyped check id")
+	}
+	step := Step{Fields: []string{"total"}}
+	if !readsAny(step, []any{"total/currency"}) || readsAny(step, []any{"totals"}) {
+		t.Error("reading total must cover total/currency but not totals")
 	}
 }
 
@@ -206,5 +213,122 @@ paths:
 	op, _ := findOp(s.Specs["svc"].Spec, "getC")
 	if _, resp := successSchema(op.Op); !hasField(resp, "version") {
 		t.Error("field from external $ref not found")
+	}
+}
+
+func layoutOf(dir string) Layout {
+	return Layout{Repo: dir, Specs: "specs", Flows: "flows", Config: "selvage.yaml"}
+}
+
+const tagged = `
+openapi: 3.1.0
+info: {title: t, version: "1"}
+paths:
+  /w:
+    post:
+      operationId: createW
+      x-status: master
+      responses:
+        "200":
+          description: ok
+          content: {application/json: {schema: {$ref: "#/components/schemas/W"}}}
+        "409":
+          description: conflict
+          x-status: hardening
+  /w/{id}/schemas:
+    post:
+      operationId: changeSchemas
+      x-status: proposed
+      responses: {"200": {description: ok}}
+components:
+  schemas:
+    W:
+      type: object
+      properties:
+        id: {type: integer}
+        cleanup_required: {type: boolean, x-status: hardening}
+`
+
+// Views prune by x-status; untagged elements stay.
+func TestApplyView(t *testing.T) {
+	cases := []struct {
+		view                  []string
+		proposed, r409, field bool
+	}{
+		{nil, true, true, true},
+		{[]string{"master"}, false, false, false},
+		{[]string{"master", "hardening"}, false, true, true},
+	}
+	for _, c := range cases {
+		spec := specFrom(t, tagged)
+		applyView(spec, c.view)
+		_, proposed := findOp(spec, "changeSchemas")
+		op, ok := findOp(spec, "createW")
+		if !ok {
+			t.Fatalf("%v: master op pruned", c.view)
+		}
+		_, resp := successSchema(op.Op)
+		got := []bool{proposed, op.Op.Responses.Value("409") != nil, hasField(resp, "cleanup_required")}
+		want := []bool{c.proposed, c.r409, c.field}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("view %v: [proposed op, 409, cleanup_required] = %v, want %v", c.view, got, want)
+				break
+			}
+		}
+		if !hasField(resp, "id") {
+			t.Errorf("view %v: untagged field pruned", c.view)
+		}
+	}
+}
+
+const replaced = `
+openapi: 3.1.0
+info: {title: t, version: "1"}
+paths:
+  /current:
+    get:
+      operationId: getCurrent
+      responses:
+        "200":
+          description: ok
+          headers:
+            X-Version: {x-status: hardening, schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - {x-status: master, x-removed-in: hardening, type: object, properties: {name: {type: string}}}
+                  - {x-status: hardening, type: object, properties: {databases: {type: array}}}
+`
+
+// x-removed-in models a shape an open PR replaces; headers and oneOf branches follow views.
+func TestViewReplacement(t *testing.T) {
+	load := func(view ...string) Snapshot {
+		spec := specFrom(t, replaced)
+		applyView(spec, view)
+		return Snapshot{
+			Specs: map[string]*load.SpecInfo{"svc": {Url: "s", Spec: spec}},
+			Flows: []Flow{{Name: "f", Steps: []Step{{Consumer: "c", Provider: "svc", OperationID: "getCurrent", Fields: []string{"name"}}}}},
+		}
+	}
+	shape := func(s Snapshot) (name, dbs, header bool) {
+		op, _ := findOp(s.Specs["svc"].Spec, "getCurrent")
+		_, resp := successSchema(op.Op)
+		return hasField(resp, "name"), hasField(resp, "databases"), op.Op.Responses.Value("200").Value.Headers["X-Version"] != nil
+	}
+	if n, d, h := shape(load("master")); !n || d || h {
+		t.Errorf("master view: name=%v databases=%v header=%v, want true false false", n, d, h)
+	}
+	if n, d, h := shape(load("master", "hardening")); n || !d || !h {
+		t.Errorf("hardening view: name=%v databases=%v header=%v, want false true true", n, d, h)
+	}
+	base, head := load("master"), load("master", "hardening")
+	changes, err := SpecChanges(base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := CheckEdges(head, changes)[0].Verdict; v != Breaking {
+		t.Errorf("consumer reading name across the replacement: got %s, want breaking", v)
 	}
 }
