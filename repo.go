@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -146,9 +147,15 @@ func loadSpec(repo, rev, file string, data []byte) (*openapi3.T, error) {
 	loader := openapi3.NewLoader()
 	loader.IsExternalRefsAllowed = true
 	loader.ReadFromURIFunc = func(_ *openapi3.Loader, u *url.URL) ([]byte, error) {
+		// Allowlist, not a denylist: case-insensitive filesystems make ".GIT" equal ".git".
+		// No segment may start with "." (covers "..", ".git", other dotfiles), and only spec-like files.
 		p := path.Clean(u.Path)
-		if u.Host != "" || path.IsAbs(p) || p == ".." || strings.HasPrefix(p, "../") || p == ".git" || strings.HasPrefix(p, ".git/") {
-			return nil, fmt.Errorf("$ref %q must be a relative path inside the repo", u.String())
+		bad := u.Host != "" || path.IsAbs(p) || !slices.Contains([]string{".yaml", ".yml", ".json"}, strings.ToLower(path.Ext(p)))
+		for _, seg := range strings.Split(p, "/") {
+			bad = bad || strings.HasPrefix(seg, ".")
+		}
+		if bad {
+			return nil, fmt.Errorf("$ref %q must be a relative path to a .yaml/.yml/.json file inside the repo", u.String())
 		}
 		if rev == "" { // the working tree can hold symlinks; git revs store link text, not targets
 			root, err1 := filepath.EvalSymlinks(repo)

@@ -332,3 +332,30 @@ func TestViewReplacement(t *testing.T) {
 		t.Errorf("consumer reading name across the replacement: got %s, want breaking", v)
 	}
 }
+
+// $ref targets are allowlisted: no dot segments in any case, spec-like files only.
+func TestRefGuard(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("type: object\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "ok.json"), []byte(`{"type": "object", "properties": {"x": {"type": "string"}}}`), 0o644)
+	spec := func(ref string) []byte {
+		return []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    get:
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "` + ref + `"}}}}
+`)
+	}
+	for _, ref := range []string{"../.git/config", "../.GIT/config", "../.Git/config.json", "../../outside.json", "../README"} {
+		if _, err := loadSpec(dir, "", "specs/s.yaml", spec(ref)); err == nil {
+			t.Errorf("$ref %q: want rejection", ref)
+		}
+	}
+	if _, err := loadSpec(dir, "", "specs/s.yaml", spec("../ok.json")); err != nil {
+		t.Errorf("$ref ../ok.json: %v", err)
+	}
+}
