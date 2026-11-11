@@ -187,6 +187,29 @@ func TestRules(t *testing.T) {
 	if !readsAny(step, []any{"total/currency"}) || readsAny(step, []any{"totals"}) {
 		t.Error("reading total must cover total/currency but not totals")
 	}
+	arr := Step{Fields: []string{"databases.status"}}
+	if !readsAny(arr, []any{"databases/items/status"}) || readsAny(arr, []any{"databases/items/name"}) {
+		t.Error("reading databases.status must match oasdiff's databases/items/status, and not databases/items/name")
+	}
+}
+
+// -repo . : the working-tree guard must compare absolute paths, or every external $ref is refused.
+func TestRefGuardRelativeRepo(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "ok.json"), []byte(`{"type": "object", "properties": {"x": {"type": "string"}}}`), 0o644)
+	spec := []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    get:
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "../ok.json"}}}}
+`)
+	t.Chdir(dir)
+	if _, err := loadSpec(".", "", "specs/s.yaml", spec); err != nil {
+		t.Errorf("-repo . with $ref ../ok.json: %v", err)
+	}
 }
 
 // A spec that $refs a sibling JSON Schema loads; the schema itself is not a service.
