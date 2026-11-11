@@ -359,3 +359,119 @@ paths:
 		t.Errorf("$ref ../ok.json: %v", err)
 	}
 }
+
+func TestParseFlowSends(t *testing.T) {
+	f, err := ParseFlow("f", `# t
+web -> orders: createOrder {id, status} <- {cartId, lines.sku}
+web -> orders: getOrder {status}
+web -> orders: cancelOrder <- {reason}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ fields, sends string }{
+		{"id,status", "cartId,lines.sku"},
+		{"status", ""},
+		{"", "reason"},
+	}
+	for i, w := range want {
+		s := f.Steps[i]
+		if got := strings.Join(s.Fields, ","); got != w.fields {
+			t.Errorf("step %d fields = %q, want %q", i, got, w.fields)
+		}
+		if got := strings.Join(s.Sends, ","); got != w.sends {
+			t.Errorf("step %d sends = %q, want %q", i, got, w.sends)
+		}
+	}
+	for _, bad := range []string{
+		"web -> orders: createOrder <- {cartId} {id}", // sends must come after reads
+		"web -> orders: createOrder {id} <- cartId",   // sends need braces
+	} {
+		if _, err := ParseFlow("bad", bad); err == nil {
+			t.Errorf("%q: want parse error", bad)
+		}
+	}
+}
+
+// Sent fields must be in the request body; the request-side rules judge oasdiff
+// changes per consumer. Real pipeline: example/v2 makes customerId required.
+func TestSends(t *testing.T) {
+	base := mustLoad(t, "example/v1")
+	head := mustLoad(t, overlay(t, "example/v1", "example/v2"))
+	changes, err := SpecChanges(base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(sends ...string) EdgeResult {
+		h := head
+		h.Flows = []Flow{{Name: "f", Steps: []Step{{Consumer: "web", Provider: "orders", OperationID: "createOrder", Fields: []string{"id"}, Sends: sends}}}}
+		return CheckEdges(h, changes)[0]
+	}
+	cases := []struct {
+		sends []string
+		want  Verdict
+	}{
+		{nil, Breaking},                                        // no sends listed: oasdiff's level (error), as before
+		{[]string{"cartId"}, Breaking},                         // customerId became required and web doesn't send it
+		{[]string{"cartId", "customerId"}, Safe},               // web already sends it
+		{[]string{"cartId", "customerId", "coupon"}, Breaking}, // coupon is not in the body
+	}
+	for _, c := range cases {
+		if r := check(c.sends...); r.Verdict != c.want {
+			t.Errorf("sends %v: got %s %v, want %s", c.sends, r.Verdict, r.Findings, c.want)
+		}
+	}
+	r := check("cartId", "customerId", "coupon")
+	if len(r.Findings) != 1 || r.Findings[0].Text != `web sends "coupon", which is not in the createOrder request body` {
+		t.Errorf("findings = %v", r.Findings)
+	}
+}
+
+const sendsV1 = `
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: {type: string}
+                lines: {type: array, items: {type: object, properties: {sku: {type: string}, qty: {type: integer}}}}
+      responses: {"204": {description: ok}}
+`
+
+// A removed request property breaks only consumers that send it; arrays match without "items".
+func TestSendsRemoved(t *testing.T) {
+	v2 := strings.Replace(strings.Replace(sendsV1, "note: {type: string}\n", "", 1), "sku: {type: string}, ", "", 1)
+	base := Snapshot{Specs: map[string]*load.SpecInfo{"svc": {Url: "a", Spec: specFrom(t, sendsV1)}}}
+	head := Snapshot{Specs: map[string]*load.SpecInfo{"svc": {Url: "b", Spec: specFrom(t, v2)}}, Rules: DefaultRules}
+	changes, err := SpecChanges(base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verdict := func(sends ...string) Verdict {
+		h := head
+		h.Flows = []Flow{{Name: "f", Steps: []Step{{Consumer: "c", Provider: "svc", OperationID: "createOrder", Sends: sends}}}}
+		return CheckEdges(h, changes)[0].Verdict
+	}
+	if v := verdict(); v != Risky {
+		t.Errorf("no sends: got %s, want risky (oasdiff warning)", v)
+	}
+	if v := verdict("lines.qty"); v != Safe {
+		t.Errorf("sends lines.qty only: got %s, want safe", v)
+	}
+	if v := verdict("note"); v != Breaking {
+		t.Errorf("sends note: got %s, want breaking", v)
+	}
+	if v := verdict("lines"); v != Breaking { // sending the whole line sends sku
+		t.Errorf("sends lines: got %s, want breaking", v)
+	}
+	if !sendsAny(Step{Sends: []string{"lines.sku"}}, []any{"lines/items/sku"}) {
+		t.Error("lines.sku must match oasdiff's lines/items/sku")
+	}
+}

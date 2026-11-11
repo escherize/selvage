@@ -69,6 +69,17 @@ func successSchema(o *openapi3.Operation) (status string, s *openapi3.SchemaRef)
 	return "", nil
 }
 
+// requestSchema returns the application/json request body schema, or nil.
+func requestSchema(o *openapi3.Operation) *openapi3.SchemaRef {
+	if o.RequestBody == nil || o.RequestBody.Value == nil {
+		return nil
+	}
+	if mt := o.RequestBody.Value.Content.Get("application/json"); mt != nil {
+		return mt.Schema
+	}
+	return nil
+}
+
 // properties merges direct properties with allOf/anyOf/oneOf members; arrays
 // (nested too) descend into items. Only allOf contributes required fields.
 // ponytail: anyOf/oneOf are unioned, so a field in one branch counts as present.

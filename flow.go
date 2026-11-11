@@ -6,14 +6,16 @@ import (
 	"strings"
 )
 
-// Step is one call in a flow: Consumer calls Provider's OperationID and reads
-// Fields (dotted paths into the 2xx JSON response body).
+// Step is one call in a flow: Consumer calls Provider's OperationID, sends
+// Sends (dotted paths into the JSON request body) and reads Fields (dotted
+// paths into the 2xx JSON response body).
 type Step struct {
 	Line        int
 	Consumer    string
 	Provider    string
 	OperationID string
 	Fields      []string
+	Sends       []string
 }
 
 type Flow struct {
@@ -22,14 +24,16 @@ type Flow struct {
 	Steps []Step
 }
 
-var stepRe = regexp.MustCompile(`^(\S+)\s*->\s*(\S+)\s*:\s*([A-Za-z0-9_.\-]+)\s*(?:\{([^}]*)\})?\s*$`)
+var stepRe = regexp.MustCompile(`^(\S+)\s*->\s*(\S+)\s*:\s*([A-Za-z0-9_.\-]+)\s*(?:\{([^}]*)\})?\s*(?:<-\s*\{([^}]*)\})?\s*$`)
 
 // ParseFlow parses the plaintext flow format:
 //
 //	# Checkout
-//	web -> orders: createOrder {id, status}
+//	web -> orders: createOrder {id, status} <- {items.sku, items.qty}
 //	orders -> payments: chargeCard {chargeId}
 //
+// "{...}" lists the response fields the consumer reads; "<- {...}" (optional,
+// after the reads) lists the request-body fields it sends.
 // A leading "# " line is the title; blank lines and "//" comments are ignored.
 func ParseFlow(name, src string) (Flow, error) {
 	f := Flow{Name: name, Title: name}
@@ -44,18 +48,23 @@ func ParseFlow(name, src string) (Flow, error) {
 		}
 		m := stepRe.FindStringSubmatch(line)
 		if m == nil {
-			return Flow{}, fmt.Errorf("%s:%d: expected `consumer -> provider: operationId {field, ...}`, got %q", name, i+1, line)
+			return Flow{}, fmt.Errorf("%s:%d: expected `consumer -> provider: operationId {field, ...} <- {field, ...}`, got %q", name, i+1, line)
 		}
-		s := Step{Line: i + 1, Consumer: m[1], Provider: m[2], OperationID: m[3]}
-		for _, fld := range strings.Split(m[4], ",") {
-			if fld = strings.TrimSpace(fld); fld != "" {
-				s.Fields = append(s.Fields, fld)
-			}
-		}
+		s := Step{Line: i + 1, Consumer: m[1], Provider: m[2], OperationID: m[3], Fields: fieldList(m[4]), Sends: fieldList(m[5])}
 		f.Steps = append(f.Steps, s)
 	}
 	if len(f.Steps) == 0 {
 		return Flow{}, fmt.Errorf("%s: flow has no steps", name)
 	}
 	return f, nil
+}
+
+func fieldList(src string) []string {
+	var out []string
+	for _, fld := range strings.Split(src, ",") {
+		if fld = strings.TrimSpace(fld); fld != "" {
+			out = append(out, fld)
+		}
+	}
+	return out
 }
