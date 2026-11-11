@@ -25,30 +25,35 @@ Flow format:
 ```
 # Checkout
 // comments start with //
-web -> orders: createOrder {id, status}
+web -> orders: createOrder {id, status} <- {cartId, lines.sku}
 orders -> payments: chargeCard {chargeId}
 web -> orders: getOrder {status, total.amount}
 ```
 
-Each step is `consumer -> provider: operationId {fields read from the 2xx JSON response}`. Field paths use dots. Arrays are traversed implicitly.
+Each step is `consumer -> provider: operationId {fields read from the 2xx JSON response} <- {fields sent in the JSON request body}`. Both lists are optional; the sent list comes last. Field paths use dots. Arrays are traversed implicitly.
 
 ## API linting: how each step is checked
 
-`check` and the compatibility report lint every flow step against the specs at the head revision (`checkStep` in `compat.go`). For each step `consumer -> provider: operationId {fields}`:
+`check` and the compatibility report lint every flow step against the specs at the head revision (`checkStep` in `compat.go`). For each step `consumer -> provider: operationId {reads} <- {sends}`:
 
 ```mermaid
 flowchart TD
-  S["step: consumer -> provider: operationId {fields}"] --> A{"provider has a spec?"}
+  S["step: consumer -> provider: operationId {reads} <- {sends}"] --> A{"provider has a spec?"}
   A -- no --> X["breaking (stop)"]
   A -- yes --> O{"operationId in the spec?"}
   O -- no --> X
   O -- yes --> F{"each read field in the 2xx response?"}
   F -- "a field is missing" --> B["breaking finding"]
-  F --> C["oasdiff changes on this method + path"]
+  F --> Q{"each sent field in the JSON request body?"}
+  Q -- "a field is missing" --> B
+  Q --> C["oasdiff changes on this method + path"]
   C --> R{"verdict rule for the change"}
   R -- "reads, and this consumer reads the property" --> B
   R -- "reads, and it doesn't" --> OK["safe"]
-  R -- "breaking / risky / safe / oasdiff level" --> V["that verdict"]
+  R -- "sends / omits, and the step lists its sends" --> SO{"does it send the property?"}
+  SO -- "sends: yes / omits: no" --> B
+  SO -- "sends: no / omits: yes" --> OK
+  R -- "breaking / risky / safe / oasdiff level, or sends / omits without a sends list" --> V["that verdict"]
   B --> W["step verdict = worst finding"]
   OK --> W
   V --> W
@@ -57,13 +62,16 @@ flowchart TD
 1. **The provider has a spec.** No spec for the service: breaking.
 2. **The operation exists.** `operationId` is not in the provider's spec: breaking ("removed or renamed?"). A flow that documents a proposed operation shows as breaking until the operation lands in the spec.
 3. **The fields the consumer reads exist.** Each field in `{...}` must be in the operation's 2xx response schema; dots walk nested objects and arrays are traversed implicitly. A missing field: breaking.
-4. **No spec change hurts this consumer.** selvage runs oasdiff between the base and head revision of each spec. Every change on the step's method and path gets a verdict for this consumer from the verdict rules below. With `reads`, a change is breaking only for consumers that read the property it names, so the same change can break one flow and be safe for another.
+4. **The fields the consumer sends exist.** Each field in `<- {...}` must be in the operation's `application/json` request body schema, walked the same way. A missing field: breaking (`web sends "coupon", which is not in the createOrder request body`).
+5. **No spec change hurts this consumer.** selvage runs oasdiff between the base and head revision of each spec. Every change on the step's method and path gets a verdict for this consumer from the verdict rules below. With `reads`, a change is breaking only for consumers that read the property it names, so the same change can break one flow and be safe for another. `sends` and `omits` do the same for request properties.
 
 A step's verdict is the worst of its findings; the report's verdict is the worst step's. `check -base REV` exits 1 when any step is breaking.
 
 What it does not check:
 
-- Requests: request bodies and parameters are judged only through oasdiff's levels, not against what a consumer sends.
+- Requests without `<- {...}`: a step that doesn't list what it sends gets oasdiff's levels for request changes.
+- Parameters and non-JSON bodies: path, query and header parameters, and request bodies that aren't `application/json`, are judged only through oasdiff's levels.
+- Request values: a sent field is checked for existence, not its type, enum or format. A changed type or a removed enum value on a sent property gets oasdiff's level.
 - Undocumented calls: a call that no flow describes is not checked against any consumer. Flows are written by hand, so the check is only as complete as the flows.
 
 ## Verdict rules
@@ -74,6 +82,8 @@ Each oasdiff change gets a verdict for each flow edge it touches. By default the
 |---|---|
 | `breaking`, `risky`, `safe` | That verdict, regardless of oasdiff's level |
 | `reads` | Breaking if the consumer reads the property the change names, otherwise safe |
+| `sends` | Breaking if the consumer sends the property the change names, otherwise safe. A step without `<- {...}` gets oasdiff's level |
+| `omits` | Breaking if the consumer does not send the property the change names, otherwise safe. A step without `<- {...}` gets oasdiff's level |
 | `oasdiff` | oasdiff's level (use it to turn a default off) |
 
 Built-in defaults:
@@ -83,7 +93,14 @@ rules:
   api-security-added: breaking                 # callers without the credential get 401s; oasdiff says info
   api-global-security-added: breaking
   response-property-enum-value-added: reads    # only breaks consumers that read the property
+  request-property-removed: sends              # only breaks consumers that send the property; oasdiff says warning
+  new-required-request-property: omits         # only breaks consumers that don't send it already
+  new-required-request-property-with-default: omits
+  request-property-became-required: omits
+  request-property-became-required-with-default: omits
 ```
+
+For `sends` and `omits`, sending a property's ancestor or descendant counts as sending it (`lines` covers `lines.sku`), and oasdiff's `items` segments are ignored (`lines/items/sku` matches `lines.sku`).
 
 `selvage.yaml` at the repo root is merged over the defaults. It's read at the head revision, so a rule change goes through review like any spec change.
 

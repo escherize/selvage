@@ -31,6 +31,9 @@ func flowD2(f Flow, results []EdgeResult) string {
 		if len(s.Fields) > 0 {
 			label += " (" + strings.Join(s.Fields, ", ") + ")"
 		}
+		if len(s.Sends) > 0 {
+			label += " <- (" + strings.Join(s.Sends, ", ") + ")"
+		}
 		fmt.Fprintf(&b, "%s -> %s: %s", strconv.Quote(s.Consumer), strconv.Quote(s.Provider), strconv.Quote(label))
 		if results != nil {
 			fmt.Fprintf(&b, " {style.stroke: %q; style.stroke-width: 2}", verdictColor[results[i].Verdict])

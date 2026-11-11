@@ -89,6 +89,13 @@ func checkStep(flow string, s Step, head Snapshot, changes checker.Changes) Edge
 			add(Breaking, "%s reads %q, which is not in the %s response", s.Consumer, f, s.OperationID)
 		}
 	}
+	// The same for every field the consumer sends: it must be in the JSON request body.
+	req := requestSchema(op.Op)
+	for _, f := range s.Sends {
+		if !hasField(req, f) {
+			add(Breaking, "%s sends %q, which is not in the %s request body", s.Consumer, f, s.OperationID)
+		}
+	}
 	for _, c := range changes {
 		// Match on method+path: GetOperationId() is "" for ops without one,
 		// while findOp falls back to a generated id.
@@ -111,6 +118,10 @@ const (
 	RuleRisky    Rule = "risky"
 	RuleSafe     Rule = "safe"
 	RuleReads    Rule = "reads" // breaking if this consumer reads the property the change names, else safe
+	// The two request-side rules judge only steps that list what they send ("<- {...}");
+	// a step without that list gets oasdiff's level.
+	RuleSends Rule = "sends" // breaking if this consumer sends the property the change names, else safe
+	RuleOmits Rule = "omits" // breaking if this consumer does not send the property the change names, else safe
 )
 
 // DefaultRules apply unless selvage.yaml overrides them. Ids are oasdiff check
@@ -121,6 +132,13 @@ var DefaultRules = map[string]Rule{
 	"api-global-security-added": RuleBreaking,
 	// A new enum value only breaks consumers that switch on the property.
 	"response-property-enum-value-added": RuleReads,
+	// A removed request property only breaks consumers that send it (oasdiff says warning).
+	"request-property-removed": RuleSends,
+	// A newly required request property only breaks consumers that don't send it.
+	"new-required-request-property":                 RuleOmits,
+	"new-required-request-property-with-default":    RuleOmits,
+	"request-property-became-required":              RuleOmits,
+	"request-property-became-required-with-default": RuleOmits,
 }
 
 // ParseRules reads selvage.yaml and merges its rules over DefaultRules:
@@ -145,10 +163,10 @@ func ParseRules(data []byte) (map[string]Rule, error) {
 			return nil, fmt.Errorf("rule %s: not an oasdiff check id (see `oasdiff checks`)", id)
 		}
 		switch r {
-		case RuleOasdiff, RuleBreaking, RuleRisky, RuleSafe, RuleReads:
+		case RuleOasdiff, RuleBreaking, RuleRisky, RuleSafe, RuleReads, RuleSends, RuleOmits:
 			out[id] = r
 		default:
-			return nil, fmt.Errorf("rule %s: %q is not one of oasdiff, breaking, risky, safe, reads", id, r)
+			return nil, fmt.Errorf("rule %s: %q is not one of oasdiff, breaking, risky, safe, reads, sends, omits", id, r)
 		}
 	}
 	return out, nil
@@ -170,6 +188,13 @@ func classify(c checker.Change, s Step, rules map[string]Rule) Verdict {
 			return Breaking
 		}
 		return Safe
+	case RuleSends, RuleOmits:
+		if len(s.Sends) > 0 {
+			if sendsAny(s, c.GetArgs()) == (rules[c.GetId()] == RuleSends) {
+				return Breaking
+			}
+			return Safe
+		}
 	}
 	switch c.GetLevel() {
 	case checker.ERR:
@@ -195,6 +220,34 @@ func readsAny(s Step, args []any) bool {
 		for _, f := range s.Fields {
 			if p == f || strings.HasPrefix(p, f+".") {
 				return true
+			}
+		}
+	}
+	return false
+}
+
+// sendsAny reports whether the step sends a property path named in the change
+// args, a descendant of it, or an ancestor of it (sending "total" sends
+// "total.currency"). oasdiff names array members with an "items" segment
+// ("lines/items/sku"); flows traverse arrays implicitly ("lines.sku"), so both
+// spellings are tried. ponytail: matches every string arg, like readsAny.
+func sendsAny(s Step, args []any) bool {
+	for _, a := range args {
+		p, ok := a.(string)
+		if !ok {
+			continue
+		}
+		var noItems []string
+		for _, seg := range strings.Split(p, "/") {
+			if seg != "items" {
+				noItems = append(noItems, seg)
+			}
+		}
+		for _, c := range []string{strings.ReplaceAll(p, "/", "."), strings.Join(noItems, ".")} {
+			for _, f := range s.Sends {
+				if c == f || strings.HasPrefix(c, f+".") || strings.HasPrefix(f, c+".") {
+					return true
+				}
 			}
 		}
 	}
