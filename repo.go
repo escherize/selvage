@@ -158,9 +158,11 @@ func loadSpec(repo, rev, file string, data []byte) (*openapi3.T, error) {
 			return nil, fmt.Errorf("$ref %q must be a relative path to a .yaml/.yml/.json file inside the repo", u.String())
 		}
 		if rev == "" { // the working tree can hold symlinks; git revs store link text, not targets
-			root, err1 := filepath.EvalSymlinks(repo)
-			real, err2 := filepath.EvalSymlinks(filepath.Join(repo, p))
-			if err1 != nil || err2 != nil || !strings.HasPrefix(real, root+string(filepath.Separator)) {
+			// Absolute first: EvalSymlinks(".") is ".", and no resolved path starts with "./".
+			abs, err0 := filepath.Abs(repo)
+			root, err1 := filepath.EvalSymlinks(abs)
+			real, err2 := filepath.EvalSymlinks(filepath.Join(abs, p))
+			if err0 != nil || err1 != nil || err2 != nil || !strings.HasPrefix(real, root+string(filepath.Separator)) {
 				return nil, fmt.Errorf("$ref %q must resolve inside the repo", u.String())
 			}
 		}

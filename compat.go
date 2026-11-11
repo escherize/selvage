@@ -205,9 +205,23 @@ func classify(c checker.Change, s Step, rules map[string]Rule) Verdict {
 	return Safe
 }
 
+// flowPaths spells an oasdiff property path the way flows write fields. oasdiff
+// uses "/" ("total/currency") and names array members with an "items" segment
+// ("lines/items/sku"); flows use "." and traverse arrays implicitly ("lines.sku").
+// Both the literal and the items-free spelling are returned, so a property that
+// is itself named "items" still matches.
+func flowPaths(p string) []string {
+	var noItems []string
+	for _, seg := range strings.Split(p, "/") {
+		if seg != "items" {
+			noItems = append(noItems, seg)
+		}
+	}
+	return []string{strings.ReplaceAll(p, "/", "."), strings.Join(noItems, ".")}
+}
+
 // readsAny reports whether the step reads a property path named in the change
 // args, or an ancestor of it (reading "total" passes "total.currency" along).
-// oasdiff writes paths with "/" ("total/currency"); flows use ".".
 // ponytail: matches every string arg, so a value arg equal to a read field name
 // also counts; use per-id arg positions if that ever misfires.
 func readsAny(s Step, args []any) bool {
@@ -216,10 +230,11 @@ func readsAny(s Step, args []any) bool {
 		if !ok {
 			continue
 		}
-		p = strings.ReplaceAll(p, "/", ".")
-		for _, f := range s.Fields {
-			if p == f || strings.HasPrefix(p, f+".") {
-				return true
+		for _, c := range flowPaths(p) {
+			for _, f := range s.Fields {
+				if c == f || strings.HasPrefix(c, f+".") {
+					return true
+				}
 			}
 		}
 	}
@@ -228,22 +243,14 @@ func readsAny(s Step, args []any) bool {
 
 // sendsAny reports whether the step sends a property path named in the change
 // args, a descendant of it, or an ancestor of it (sending "total" sends
-// "total.currency"). oasdiff names array members with an "items" segment
-// ("lines/items/sku"); flows traverse arrays implicitly ("lines.sku"), so both
-// spellings are tried. ponytail: matches every string arg, like readsAny.
+// "total.currency"). ponytail: matches every string arg, like readsAny.
 func sendsAny(s Step, args []any) bool {
 	for _, a := range args {
 		p, ok := a.(string)
 		if !ok {
 			continue
 		}
-		var noItems []string
-		for _, seg := range strings.Split(p, "/") {
-			if seg != "items" {
-				noItems = append(noItems, seg)
-			}
-		}
-		for _, c := range []string{strings.ReplaceAll(p, "/", "."), strings.Join(noItems, ".")} {
+		for _, c := range flowPaths(p) {
 			for _, f := range s.Sends {
 				if c == f || strings.HasPrefix(c, f+".") || strings.HasPrefix(f, c+".") {
 					return true
