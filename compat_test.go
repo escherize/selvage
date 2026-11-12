@@ -767,3 +767,34 @@ paths:
 		t.Error("422 application/problem+json: field not found")
 	}
 }
+
+// A non-JSON 2xx must not hide a later JSON 2xx, and JSON-like media types win over the name-order fallback.
+func TestBodySchemaPrefersJSON(t *testing.T) {
+	obj := func(prop string) string {
+		return `{schema: {type: object, properties: {` + prop + `: {type: string}}}}`
+	}
+	bin := `{schema: {type: string, format: binary}}`
+	for name, c := range map[string]struct{ responses, status string }{
+		"binary 200, JSON 201":   {`"200": {description: d, content: {application/octet-stream: ` + bin + `}}, "201": {description: d, content: {application/json: ` + obj("id") + `}}`, "201"},
+		"schemaless JSON 200":    {`"200": {description: d, content: {application/json: {}, text/csv: {schema: {type: string}}}}, "201": {description: d, content: {application/json: ` + obj("id") + `}}`, "201"},
+		"json with charset":      {`"200": {description: d, content: {"application/json; charset=utf-8": ` + obj("id") + `, application/a-first: ` + obj("zzz") + `}}`, "200"},
+		"vendor +json vs binary": {`"200": {description: d, content: {application/octet-stream: ` + bin + `, application/vnd.api+json: ` + obj("id") + `}}`, "200"},
+	} {
+		spec, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    get:
+      operationId: op
+      responses: {`+c.responses+`}
+`))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		op, _ := findOp(spec, "op")
+		if status, s := successSchema(op.Op); status != c.status || !hasField(s, "id") {
+			t.Errorf("%s: picked %s, id=%v; want %s with id", name, status, hasField(s, "id"), c.status)
+		}
+	}
+}

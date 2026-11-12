@@ -75,7 +75,8 @@ What it does not check:
 - Which response a change is in: the `reads` rule matches a changed property against every field the step reads, from any status. A step that reads `code` from the 409 is also flagged for a change to `code` in the 200.
 - Requests without `<- {...}`: a step that doesn't list what it sends gets oasdiff's levels for request changes.
 - Parameters: path, query and header parameters are judged only through oasdiff's levels.
-- Bodies without a schema: a body is checked through its `application/json` schema, or the first other media type that has one (a YAML body with a JSON Schema works). A media type with no schema cannot be checked.
+- One schema per body: a body is checked through its JSON media type (`application/json`, `application/problem+json`, ...). If it has none, the first other media type by name that has a schema is used, so a YAML body with a JSON Schema works. Fields that exist only under another media type of the same body are reported missing, and a body with no schema at all reports every field missing. The response a step reads is the first 2xx with a JSON body, else the first 2xx with any schema.
+- Which media type a change is in: oasdiff reports changes for every media type, and the `reads`, `sends` and `omits` rules match on the property name alone.
 - Request values: a sent field is checked for existence, not its type, enum or format. A changed type or a removed enum value on a sent property gets oasdiff's level.
 - Undocumented calls: a call that no flow describes is not checked against any consumer. Flows are written by hand, so the check is only as complete as the flows.
 

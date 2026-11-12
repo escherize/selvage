@@ -72,40 +72,67 @@ func findOp(t *openapi3.T, id string) (Op, bool) {
 	return Op{}, false
 }
 
-// bodySchema picks the schema that describes a body: application/json when it
-// has one, otherwise the first media type (by name) that has a schema, so a
-// YAML or XML body described by a schema is rendered and checked too.
-func bodySchema(c openapi3.Content) *openapi3.SchemaRef {
+// jsonSchema returns the schema of the JSON media type in c: application/json
+// (kin-openapi also matches application/* and */*), else a key that is JSON once
+// its parameters are dropped ("application/json; charset=utf-8",
+// "application/problem+json"), in name order.
+func jsonSchema(c openapi3.Content) *openapi3.SchemaRef {
 	if mt := c.Get("application/json"); mt != nil && mt.Schema != nil {
 		return mt.Schema
 	}
-	types := make([]string, 0, len(c))
-	for t := range c {
-		types = append(types, t)
-	}
-	sort.Strings(types)
-	for _, t := range types {
-		if c[t] != nil && c[t].Schema != nil {
+	for _, t := range mediaTypes(c) {
+		base, _, _ := strings.Cut(strings.ToLower(t), ";")
+		base = strings.TrimSpace(base)
+		if (base == "application/json" || strings.HasSuffix(base, "+json")) && c[t].Schema != nil {
 			return c[t].Schema
 		}
 	}
 	return nil
 }
 
-// successSchema returns the body schema of the first 2xx response that has one.
+// bodySchema picks the schema that describes a body: the JSON one, otherwise
+// the first media type (by name) that has a schema, so a YAML or XML body
+// described by a schema is rendered and checked too.
+func bodySchema(c openapi3.Content) *openapi3.SchemaRef {
+	if s := jsonSchema(c); s != nil {
+		return s
+	}
+	for _, t := range mediaTypes(c) {
+		if c[t].Schema != nil {
+			return c[t].Schema
+		}
+	}
+	return nil
+}
+
+// mediaTypes is the non-nil media type keys of c, sorted.
+func mediaTypes(c openapi3.Content) []string {
+	types := make([]string, 0, len(c))
+	for t, mt := range c {
+		if mt != nil {
+			types = append(types, t)
+		}
+	}
+	sort.Strings(types)
+	return types
+}
+
+// successSchema returns the body schema of the first 2xx response with a JSON
+// body. Only when no 2xx has one does it take the first 2xx with any schema:
+// a binary 200 must not hide the JSON 201 a consumer reads.
 func successSchema(o *openapi3.Operation) (status string, s *openapi3.SchemaRef) {
 	codes := make([]string, 0)
 	for code := range o.Responses.Map() {
-		codes = append(codes, code)
+		if strings.HasPrefix(code, "2") && o.Responses.Map()[code].Value != nil {
+			codes = append(codes, code)
+		}
 	}
 	sort.Strings(codes)
-	for _, code := range codes {
-		r := o.Responses.Map()[code]
-		if !strings.HasPrefix(code, "2") || r.Value == nil {
-			continue
-		}
-		if s := bodySchema(r.Value.Content); s != nil {
-			return code, s
+	for _, pick := range []func(openapi3.Content) *openapi3.SchemaRef{jsonSchema, bodySchema} {
+		for _, code := range codes {
+			if s := pick(o.Responses.Map()[code].Value.Content); s != nil {
+				return code, s
+			}
 		}
 	}
 	return "", nil
