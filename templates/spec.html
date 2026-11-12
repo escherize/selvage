@@ -3,6 +3,7 @@
   <aside class="opnav">
     <h2>{{.Service}} <span class="muted">v{{.Spec.Info.Version}}</span></h2>
     <p class="muted">{{.Ref.Label}}</p>
+    {{with .Prefix}}<p class="muted">paths under <code>{{.}}</code></p>{{end}}
     {{$svc := .Service}}{{$q := .Query}}{{$tag := ""}}
     {{range .Ops}}
       {{if ne .Tag $tag}}{{$tag = .Tag}}<h3>{{.Tag}}</h3>{{end}}
@@ -17,14 +18,14 @@
 
 {{define "op"}}{{with .Sel}}{{if .Op}}
 <section class="opmain">
-  <h2><span class="m m-{{.Method}}">{{.Method}}</span> <code>{{.Path}}</code></h2>
+  <h2><span class="m m-{{.Method}}">{{.Method}}</span> <code><span class="muted">{{$.Prefix}}</span>{{.Path}}</code></h2>
   <p class="muted">operationId <code>{{.ID}}</code></p>
   {{with .Summary}}<p>{{.}}</p>{{end}}
-  {{with .Op.Description}}<p>{{.}}</p>{{end}}
+  {{with .Op.Description}}<div class="md">{{md .}}</div>{{end}}
   {{if .Op.Parameters}}
   <h3>Parameters</h3>
   <table>{{range .Op.Parameters}}{{with .Value}}
-    <tr><td><code>{{.Name}}</code>{{if .Required}}<span class="req">*</span>{{end}}</td><td class="muted">{{.In}}</td><td>{{.Description}}</td></tr>
+    <tr><td><code>{{.Name}}</code>{{if .Required}}<span class="req">*</span>{{end}}</td><td class="muted">{{.In}}</td><td class="md">{{md .Description}}</td></tr>
   {{end}}{{end}}</table>
   {{end}}
   {{with body .}}<h3>Request body</h3><ul class="schema">{{template "schema" .}}</ul>{{end}}

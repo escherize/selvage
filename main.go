@@ -9,7 +9,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
+	"strings"
+
+	"github.com/yuin/goldmark"
 )
 
 //go:embed templates static
@@ -21,6 +25,8 @@ const usage = `selvage - API contract viewer
       browse specs, flows and diffs
   selvage check [layout flags] -base REV [-base-view V] [-head REV] [-head-view V]
       exit 1 if any flow edge breaks; head defaults to the working tree
+  selvage export [layout flags] -out DIR [-base REV] [-base-view V] [-head REV] [-head-view V]
+      write every page for one base/head comparison as a static site; base defaults to HEAD
 
   layout flags: -repo DIR -specs DIR -flows DIR -config FILE (paths relative to -repo)
   views: a comma list of x-status values to keep, e.g. -head-view master,hardening`
@@ -41,6 +47,7 @@ func main() {
 	baseView := fl.String("base-view", "", "x-status values to keep in base (empty = all)")
 	head := fl.String("head", "", "head git revision (empty = working tree)")
 	headView := fl.String("head-view", "", "x-status values to keep in head (empty = all)")
+	out := fl.String("out", "", "export: output directory")
 	fl.Parse(os.Args[2:])
 	if l.Repo == "" || l.Specs == "" || l.Flows == "" || l.Config == "" {
 		fmt.Fprintln(os.Stderr, "-repo, -specs, -flows and -config must not be empty")
@@ -57,6 +64,19 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView)))
+	case "export":
+		if *out == "" {
+			fmt.Fprintln(os.Stderr, "export: -out is required")
+			os.Exit(2)
+		}
+		if *base == "" {
+			*base = "HEAD"
+		}
+		if err := export(l, ParseRef(*base, *baseView), ParseRef(*head, *headView), *out); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("wrote", *out)
 	default:
 		fmt.Println(usage)
 		os.Exit(2)
@@ -130,6 +150,7 @@ var pages = map[string]*template.Template{}
 
 func init() {
 	funcs := template.FuncMap{
+		"md": markdown,
 		"response": func(op Op) Node {
 			status, s := successSchema(op.Op)
 			return schemaTree(status, s, false)
@@ -147,6 +168,20 @@ func init() {
 		pages[p] = template.Must(template.New(p).Funcs(funcs).ParseFS(assets, "templates/layout.html", "templates/"+p))
 	}
 }
+
+// markdown renders an OpenAPI description (CommonMark). goldmark's defaults drop
+// raw HTML and javascript: links, so spec text cannot inject script.
+func markdown(s string) template.HTML {
+	var b strings.Builder
+	if err := goldmark.Convert([]byte(s), &b); err != nil {
+		return template.HTML(template.HTMLEscapeString(s))
+	}
+	// Images are dropped to their alt text: a remote image in a contributor's
+	// spec would make every viewer's browser fetch a URL the contributor chose.
+	return template.HTML(mdImage.ReplaceAllString(b.String(), "$1"))
+}
+
+var mdImage = regexp.MustCompile(`<img src="[^"]*" alt="([^"]*)"[^>]*>`)
 
 // render writes the full page, or only `fragment` when htmx asked for it.
 func render(w http.ResponseWriter, r *http.Request, page, fragment string, data map[string]any) {
@@ -207,7 +242,7 @@ func routes(l Layout) http.Handler {
 			sel = ops[0]
 		}
 		render(w, r, "spec.html", "op", map[string]any{
-			"Snap": snap, "Service": r.PathValue("svc"), "Spec": info.Spec, "Ops": ops, "Sel": sel, "Ref": ref, "Query": template.URL(r.URL.RawQuery),
+			"Snap": snap, "Service": r.PathValue("svc"), "Spec": info.Spec, "Ops": ops, "Sel": sel, "Prefix": pathPrefix(info.Spec), "Ref": ref, "Query": template.URL(r.URL.RawQuery),
 		})
 	}
 	mux.HandleFunc("GET /spec/{svc}", spec)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -40,6 +41,27 @@ func operations(t *openapi3.T) []Op {
 	})
 	return ops
 }
+
+// pathPrefix is the path part of the first server URL: "{parent}/api/ee/x" -> "/api/ee/x".
+// Operation paths are relative to it.
+func pathPrefix(t *openapi3.T) string {
+	if len(t.Servers) == 0 {
+		return ""
+	}
+	p := serverOrigin.ReplaceAllString(t.Servers[0].URL, "")
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	p = strings.Trim(p, "/")
+	if p == "" {
+		return ""
+	}
+	return "/" + p
+}
+
+// The origin is "scheme://host" (either part may be a {variable}), "//host", or a
+// leading {variable} that stands for the whole origin. The rest is the path.
+var serverOrigin = regexp.MustCompile(`^(?:[^/?#]*:)?//[^/?#]*|^\{[^}]*\}`)
 
 func findOp(t *openapi3.T, id string) (Op, bool) {
 	for _, o := range operations(t) {
@@ -89,14 +111,20 @@ func successSchema(o *openapi3.Operation) (status string, s *openapi3.SchemaRef)
 	return "", nil
 }
 
-// statusSchema returns the body schema of the response with exactly
-// this status code. declared is false when the operation has no such response.
+// statusSchema returns the body schema of the response that covers this
+// status: its own entry, else its range ("4XX"), else "default", as OpenAPI
+// resolves them. declared is false when no response covers it.
 func statusSchema(o *openapi3.Operation, code string) (s *openapi3.SchemaRef, declared bool) {
-	r := o.Responses.Map()[code]
-	if r == nil || r.Value == nil {
-		return nil, false
+	keys := []string{code, "default"}
+	if len(code) == 3 && code[1:] != "XX" {
+		keys = []string{code, code[:1] + "XX", "default"}
 	}
-	return bodySchema(r.Value.Content), true
+	for _, k := range keys {
+		if r := o.Responses.Map()[k]; r != nil && r.Value != nil {
+			return bodySchema(r.Value.Content), true
+		}
+	}
+	return nil, false
 }
 
 // requestSchema returns the request body schema, or nil.

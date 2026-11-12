@@ -26,7 +26,7 @@
   <span class="fname">{{.Name}}</span>{{if .Required}}<span class="req">*</span>{{end}}
   <span class="ftype">{{.Type}}</span>
   {{if .Enum}}<span class="enum">{{range $i, $e := .Enum}}{{if $i}} | {{end}}{{$e}}{{end}}</span>{{end}}
-  {{if .Desc}}<div class="fdesc">{{.Desc}}</div>{{end}}
+  {{if .Desc}}<div class="fdesc md">{{md .Desc}}</div>{{end}}
   {{if .Children}}<ul>{{range .Children}}{{template "schema" .}}{{end}}</ul>{{end}}
 </li>{{end}}
 
