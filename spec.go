@@ -69,6 +69,19 @@ func successSchema(o *openapi3.Operation) (status string, s *openapi3.SchemaRef)
 	return "", nil
 }
 
+// statusSchema returns the application/json schema of the response with exactly
+// this status code. declared is false when the operation has no such response.
+func statusSchema(o *openapi3.Operation, code string) (s *openapi3.SchemaRef, declared bool) {
+	r := o.Responses.Map()[code]
+	if r == nil || r.Value == nil {
+		return nil, false
+	}
+	if mt := r.Value.Content.Get("application/json"); mt != nil {
+		return mt.Schema, true
+	}
+	return nil, true
+}
+
 // requestSchema returns the application/json request body schema, or nil.
 func requestSchema(o *openapi3.Operation) *openapi3.SchemaRef {
 	if o.RequestBody == nil || o.RequestBody.Value == nil {

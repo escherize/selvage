@@ -11,7 +11,7 @@
     <td class="muted">{{.Step.Line}}</td>
     <td>{{.Step.Consumer}} &rarr; <a href="/spec/{{.Step.Provider}}/op/{{.Step.OperationID}}">{{.Step.Provider}}.{{.Step.OperationID}}</a></td>
     <td>{{range .Step.Sends}}<code>{{.}}</code> {{end}}</td>
-    <td>{{range .Step.Fields}}<code>{{.}}</code> {{end}}</td>
+    <td>{{range .Step.Fields}}<code>{{.}}</code> {{end}}{{range .Step.Status}}<div><span class="muted">{{.Code}}</span> {{range .Fields}}<code>{{.}}</code> {{end}}</div>{{end}}</td>
     <td><span class="badge v-{{.Verdict}}">{{.Verdict}}</span>{{range .Findings}}<div class="finding">{{.Text}}</div>{{end}}</td>
   </tr>
   {{end}}{{else}}{{range .Flow.Steps}}
@@ -19,7 +19,7 @@
     <td class="muted">{{.Line}}</td>
     <td>{{.Consumer}} &rarr; <a href="/spec/{{.Provider}}/op/{{.OperationID}}">{{.Provider}}.{{.OperationID}}</a></td>
     <td>{{range .Sends}}<code>{{.}}</code> {{end}}</td>
-    <td>{{range .Fields}}<code>{{.}}</code> {{end}}</td>
+    <td>{{range .Fields}}<code>{{.}}</code> {{end}}{{range .Status}}<div><span class="muted">{{.Code}}</span> {{range .Fields}}<code>{{.}}</code> {{end}}</div>{{end}}</td>
     <td class="muted">-</td>
   </tr>
   {{end}}{{end}}

@@ -89,6 +89,19 @@ func checkStep(flow string, s Step, head Snapshot, changes checker.Changes) Edge
 			add(Breaking, "%s reads %q, which is not in the %s response", s.Consumer, f, s.OperationID)
 		}
 	}
+	// And every field it reads from another status, e.g. an error body it branches on.
+	for _, sr := range s.Status {
+		schema, declared := statusSchema(op.Op, sr.Code)
+		if !declared {
+			add(Breaking, "%s handles a %s from %s, which the spec does not declare", s.Consumer, sr.Code, s.OperationID)
+			continue
+		}
+		for _, f := range sr.Fields {
+			if !hasField(schema, f) {
+				add(Breaking, "%s reads %q, which is not in the %s %s response", s.Consumer, f, s.OperationID, sr.Code)
+			}
+		}
+	}
 	// The same for every field the consumer sends: it must be in the JSON request body.
 	req := requestSchema(op.Op)
 	for _, f := range s.Sends {
