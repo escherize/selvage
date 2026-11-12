@@ -550,3 +550,37 @@ paths:
 		}
 	}
 }
+
+// A body described only under a non-JSON media type is still checked.
+func TestNonJSONBody(t *testing.T) {
+	spec, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /c:
+    put:
+      operationId: putC
+      requestBody: {content: {application/x-yaml: {schema: {type: object, properties: {sent: {type: string}}}}}}
+      responses:
+        "200":
+          description: ok
+          content:
+            text/plain: {}
+            application/x-yaml: {schema: {type: object, properties: {yaml: {type: string}}}}
+            application/json: {schema: {type: object, properties: {json: {type: string}}}}
+        "201": {description: ok, content: {application/x-yaml: {schema: {type: object, properties: {yaml: {type: string}}}}}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _ := findOp(spec, "putC")
+	if _, s := successSchema(op.Op); !hasField(s, "json") {
+		t.Error("application/json must win when it has a schema")
+	}
+	if s, _ := statusSchema(op.Op, "201"); !hasField(s, "yaml") {
+		t.Error("201: want the application/x-yaml schema")
+	}
+	if !hasField(requestSchema(op.Op), "sent") {
+		t.Error("request: want the application/x-yaml schema")
+	}
+}

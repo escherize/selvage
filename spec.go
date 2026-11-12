@@ -50,7 +50,27 @@ func findOp(t *openapi3.T, id string) (Op, bool) {
 	return Op{}, false
 }
 
-// successSchema returns the first 2xx application/json response schema.
+// bodySchema picks the schema that describes a body: application/json when it
+// has one, otherwise the first media type (by name) that has a schema, so a
+// YAML or XML body described by a schema is rendered and checked too.
+func bodySchema(c openapi3.Content) *openapi3.SchemaRef {
+	if mt := c.Get("application/json"); mt != nil && mt.Schema != nil {
+		return mt.Schema
+	}
+	types := make([]string, 0, len(c))
+	for t := range c {
+		types = append(types, t)
+	}
+	sort.Strings(types)
+	for _, t := range types {
+		if c[t] != nil && c[t].Schema != nil {
+			return c[t].Schema
+		}
+	}
+	return nil
+}
+
+// successSchema returns the body schema of the first 2xx response that has one.
 func successSchema(o *openapi3.Operation) (status string, s *openapi3.SchemaRef) {
 	codes := make([]string, 0)
 	for code := range o.Responses.Map() {
@@ -62,35 +82,29 @@ func successSchema(o *openapi3.Operation) (status string, s *openapi3.SchemaRef)
 		if !strings.HasPrefix(code, "2") || r.Value == nil {
 			continue
 		}
-		if mt := r.Value.Content.Get("application/json"); mt != nil && mt.Schema != nil {
-			return code, mt.Schema
+		if s := bodySchema(r.Value.Content); s != nil {
+			return code, s
 		}
 	}
 	return "", nil
 }
 
-// statusSchema returns the application/json schema of the response with exactly
+// statusSchema returns the body schema of the response with exactly
 // this status code. declared is false when the operation has no such response.
 func statusSchema(o *openapi3.Operation, code string) (s *openapi3.SchemaRef, declared bool) {
 	r := o.Responses.Map()[code]
 	if r == nil || r.Value == nil {
 		return nil, false
 	}
-	if mt := r.Value.Content.Get("application/json"); mt != nil {
-		return mt.Schema, true
-	}
-	return nil, true
+	return bodySchema(r.Value.Content), true
 }
 
-// requestSchema returns the application/json request body schema, or nil.
+// requestSchema returns the request body schema, or nil.
 func requestSchema(o *openapi3.Operation) *openapi3.SchemaRef {
 	if o.RequestBody == nil || o.RequestBody.Value == nil {
 		return nil
 	}
-	if mt := o.RequestBody.Value.Content.Get("application/json"); mt != nil {
-		return mt.Schema
-	}
-	return nil
+	return bodySchema(o.RequestBody.Value.Content)
 }
 
 // properties merges direct properties with allOf/anyOf/oneOf members; arrays

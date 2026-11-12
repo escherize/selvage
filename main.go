@@ -135,14 +135,11 @@ func init() {
 			return schemaTree(status, s, false)
 		},
 		"body": func(op Op) *Node {
-			if op.Op.RequestBody == nil || op.Op.RequestBody.Value == nil {
+			s := requestSchema(op.Op)
+			if s == nil {
 				return nil
 			}
-			mt := op.Op.RequestBody.Value.Content.Get("application/json")
-			if mt == nil {
-				return nil
-			}
-			n := schemaTree("body", mt.Schema, true)
+			n := schemaTree("body", s, true)
 			return &n
 		},
 	}

@@ -64,8 +64,8 @@ flowchart TD
 1. **The provider has a spec.** No spec for the service: breaking.
 2. **The operation exists.** `operationId` is not in the provider's spec: breaking ("removed or renamed?"). A flow that documents a proposed operation shows as breaking until the operation lands in the spec.
 3. **The fields the consumer reads exist.** Each field in `{...}` must be in the operation's 2xx response schema; dots walk nested objects and arrays are traversed implicitly. A missing field: breaking.
-4. **The error bodies the consumer handles exist.** For each `STATUS {...}`, the operation must declare that status, and each field must be in its `application/json` schema. An undeclared status or a missing field: breaking.
-5. **The fields the consumer sends exist.** Each field in `<- {...}` must be in the operation's `application/json` request body schema, walked the same way. A missing field: breaking (`web sends "coupon", which is not in the createOrder request body`).
+4. **The error bodies the consumer handles exist.** For each `STATUS {...}`, the operation must declare that status, and each field must be in its body schema. An undeclared status or a missing field: breaking.
+5. **The fields the consumer sends exist.** Each field in `<- {...}` must be in the operation's request body schema, walked the same way. A missing field: breaking (`web sends "coupon", which is not in the createOrder request body`).
 6. **No spec change hurts this consumer.** selvage runs oasdiff between the base and head revision of each spec. Every change on the step's method and path gets a verdict for this consumer from the verdict rules below. With `reads`, a change is breaking only for consumers that read the property it names, so the same change can break one flow and be safe for another. `sends` and `omits` do the same for request properties.
 
 A step's verdict is the worst of its findings; the report's verdict is the worst step's. `check -base REV` exits 1 when any step is breaking.
@@ -74,7 +74,8 @@ What it does not check:
 
 - Changes to error bodies: `STATUS {...}` fields are checked for existence at the head revision. The `reads` rule matches only the 2xx field list, so a new enum value on an error field gets oasdiff's level.
 - Requests without `<- {...}`: a step that doesn't list what it sends gets oasdiff's levels for request changes.
-- Parameters and non-JSON bodies: path, query and header parameters, and request bodies that aren't `application/json`, are judged only through oasdiff's levels.
+- Parameters: path, query and header parameters are judged only through oasdiff's levels.
+- Bodies without a schema: a body is checked through its `application/json` schema, or the first other media type that has one (a YAML body with a JSON Schema works). A media type with no schema cannot be checked.
 - Request values: a sent field is checked for existence, not its type, enum or format. A changed type or a removed enum value on a sent property gets oasdiff's level.
 - Undocumented calls: a call that no flow describes is not checked against any consumer. Flows are written by hand, so the check is only as complete as the flows.
 
