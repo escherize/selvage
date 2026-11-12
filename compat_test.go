@@ -1,8 +1,10 @@
 package main
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -383,6 +385,68 @@ paths:
 	}
 }
 
+func TestPathPrefix(t *testing.T) {
+	for url, want := range map[string]string{
+		"{parent}/api/ee/workspace-manager": "/api/ee/workspace-manager",
+		"https://h.example.com/api/":        "/api",
+		"/v1":                               "/v1",
+		"https://h.example.com":             "",
+		"{scheme}://{host}/api":             "/api",
+		"//host/api":                        "/api",
+		"https://h/api?x=1":                 "/api",
+		"api/v1":                            "/api/v1",
+	} {
+		if got := pathPrefix(&openapi3.T{Servers: openapi3.Servers{{URL: url}}}); got != want {
+			t.Errorf("%s: got %q, want %q", url, got, want)
+		}
+	}
+}
+
+func TestMarkdown(t *testing.T) {
+	got := string(markdown("Use `x`.\n\n<script>alert(1)</script> [a](javascript:alert(1))"))
+	if !strings.Contains(got, "<code>x</code>") {
+		t.Errorf("no code span: %s", got)
+	}
+	if strings.Contains(got, "<script") || strings.Contains(got, "javascript:") {
+		t.Errorf("unsafe output: %s", got)
+	}
+	// A remote image would make the viewer's browser fetch a URL the spec author chose.
+	if got := string(markdown("![logo](http://example.com/t.png)")); strings.Contains(got, "<img") || !strings.Contains(got, "logo") {
+		t.Errorf("image not reduced to its alt text: %s", got)
+	}
+}
+
+// Every link in an export must be relative and point at a file that was written.
+func TestExport(t *testing.T) {
+	out := t.TempDir()
+	if err := export(layoutOf("example/v1"), ParseRef("HEAD", ""), Ref{}, out); err != nil {
+		t.Fatal(err)
+	}
+	link := regexp.MustCompile(`(?:href|src)="([^"#]*)"`)
+	pages := 0
+	filepath.WalkDir(out, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(p) != ".html" {
+			return err
+		}
+		pages++
+		data, _ := os.ReadFile(p)
+		if strings.Contains(string(data), "hx-") {
+			t.Errorf("%s: htmx attribute left in export", p)
+		}
+		for _, m := range link.FindAllStringSubmatch(string(data), -1) {
+			if strings.HasPrefix(m[1], "/") {
+				t.Errorf("%s: absolute link %q", p, m[1])
+			} else if _, err := os.Stat(filepath.Join(filepath.Dir(p), m[1])); err != nil {
+				t.Errorf("%s: dangling link %q", p, m[1])
+			}
+		}
+		return nil
+	})
+	if pages < 5 {
+		t.Errorf("exported %d pages, want index, diff, specs, operations and flows", pages)
+	}
+}
+
 func TestParseFlowSends(t *testing.T) {
 	f, err := ParseFlow("f", `# t
 web -> orders: createOrder {id, status} <- {cartId, lines.sku}
@@ -496,6 +560,57 @@ func TestSendsRemoved(t *testing.T) {
 	}
 	if !sendsAny(Step{Sends: []string{"lines.sku"}}, []any{"lines/items/sku"}) {
 		t.Error("lines.sku must match oasdiff's lines/items/sku")
+	}
+}
+
+// exportRepo writes one spec whose operation has the given id and description, plus a flow that calls it.
+func exportRepo(t *testing.T, opID, desc string) string {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "specs"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "flows"), 0o755)
+	os.WriteFile(filepath.Join(dir, "specs", "svc.yaml"), []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    get:
+      operationId: "`+opID+`"
+      description: "`+desc+`"
+      responses: {"200": {description: ok}}
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "flows", "f.flow"), []byte("web -> svc: missingOp\n"), 0o644)
+	return dir
+}
+
+func TestExportOddNames(t *testing.T) {
+	// A space or "%" in an operationId is a valid page; Markdown links that are not ours stay as written.
+	out := t.TempDir()
+	repo := exportRepo(t, "get user%zz", "[cdn](//cdn.example/x) [frag](/spec/svc#top) [docs](/docs/api)")
+	if err := export(layoutOf(repo), ParseRef("HEAD", ""), Ref{}, out); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(out, "spec", "svc", "op", "get user%zz.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`href="//cdn.example/x"`, `href="../../../spec/svc.html#top"`, `href="/docs/api"`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("want %s in the exported page", want)
+		}
+	}
+	index, _ := os.ReadFile(filepath.Join(out, "spec", "svc.html"))
+	if !strings.Contains(string(index), `href="../spec/svc/op/get%20user%25zz.html"`) {
+		t.Errorf("link to the operation page is not escaped: %s", regexp.MustCompile(`href="[^"]*op/[^"]*"`).FindString(string(index)))
+	}
+
+	// An id with no URL of its own fails the export before anything is written.
+	out = t.TempDir()
+	err = export(layoutOf(exportRepo(t, "a/b", "d")), ParseRef("HEAD", ""), Ref{}, out)
+	if err == nil || !strings.Contains(err.Error(), "/spec/svc/op/a/b") {
+		t.Fatalf("want an error naming the page, got %v", err)
+	}
+	if entries, _ := os.ReadDir(out); len(entries) != 0 {
+		t.Errorf("failed export wrote %d entries", len(entries))
 	}
 }
 

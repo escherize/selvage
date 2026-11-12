@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -40,6 +41,27 @@ func operations(t *openapi3.T) []Op {
 	})
 	return ops
 }
+
+// pathPrefix is the path part of the first server URL: "{parent}/api/ee/x" -> "/api/ee/x".
+// Operation paths are relative to it.
+func pathPrefix(t *openapi3.T) string {
+	if len(t.Servers) == 0 {
+		return ""
+	}
+	p := serverOrigin.ReplaceAllString(t.Servers[0].URL, "")
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	p = strings.Trim(p, "/")
+	if p == "" {
+		return ""
+	}
+	return "/" + p
+}
+
+// The origin is "scheme://host" (either part may be a {variable}), "//host", or a
+// leading {variable} that stands for the whole origin. The rest is the path.
+var serverOrigin = regexp.MustCompile(`^(?:[^/?#]*:)?//[^/?#]*|^\{[^}]*\}`)
 
 func findOp(t *openapi3.T, id string) (Op, bool) {
 	for _, o := range operations(t) {

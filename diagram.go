@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"io"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,5 +70,10 @@ func renderSVG(src string) (template.HTML, error) {
 		return "", err
 	}
 	svg, err := d2svg.Render(diagram, opts)
+	// D2's outer <svg> has only a viewBox, so CSS stretches it to the container width.
+	// Pin its natural width; .diagram svg { max-width: 100% } still shrinks wide diagrams.
+	svg = viewBoxWidth.ReplaceAll(svg, []byte(`<svg$1 width="$2" viewBox="0 0 $2`))
 	return template.HTML(svg), err
 }
+
+var viewBoxWidth = regexp.MustCompile(`<svg([^>]*?) viewBox="0 0 (\d+)`)
