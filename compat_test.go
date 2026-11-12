@@ -1,8 +1,10 @@
 package main
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -380,6 +382,60 @@ paths:
 	}
 	if _, err := loadSpec(dir, "", "specs/s.yaml", spec("../ok.json")); err != nil {
 		t.Errorf("$ref ../ok.json: %v", err)
+	}
+}
+
+func TestPathPrefix(t *testing.T) {
+	for url, want := range map[string]string{
+		"{parent}/api/ee/workspace-manager": "/api/ee/workspace-manager",
+		"https://h.example.com/api/":        "/api",
+		"/v1":                               "/v1",
+		"https://h.example.com":             "",
+	} {
+		if got := pathPrefix(&openapi3.T{Servers: openapi3.Servers{{URL: url}}}); got != want {
+			t.Errorf("%s: got %q, want %q", url, got, want)
+		}
+	}
+}
+
+func TestMarkdown(t *testing.T) {
+	got := string(markdown("Use `x`.\n\n<script>alert(1)</script> [a](javascript:alert(1))"))
+	if !strings.Contains(got, "<code>x</code>") {
+		t.Errorf("no code span: %s", got)
+	}
+	if strings.Contains(got, "<script") || strings.Contains(got, "javascript:") {
+		t.Errorf("unsafe output: %s", got)
+	}
+}
+
+// Every link in an export must be relative and point at a file that was written.
+func TestExport(t *testing.T) {
+	out := t.TempDir()
+	if err := export(layoutOf("example/v1"), ParseRef("HEAD", ""), Ref{}, out); err != nil {
+		t.Fatal(err)
+	}
+	link := regexp.MustCompile(`(?:href|src)="([^"#]*)"`)
+	pages := 0
+	filepath.WalkDir(out, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(p) != ".html" {
+			return err
+		}
+		pages++
+		data, _ := os.ReadFile(p)
+		if strings.Contains(string(data), "hx-") {
+			t.Errorf("%s: htmx attribute left in export", p)
+		}
+		for _, m := range link.FindAllStringSubmatch(string(data), -1) {
+			if strings.HasPrefix(m[1], "/") {
+				t.Errorf("%s: absolute link %q", p, m[1])
+			} else if _, err := os.Stat(filepath.Join(filepath.Dir(p), m[1])); err != nil {
+				t.Errorf("%s: dangling link %q", p, m[1])
+			}
+		}
+		return nil
+	})
+	if pages < 5 {
+		t.Errorf("exported %d pages, want index, diff, specs, operations and flows", pages)
 	}
 }
 

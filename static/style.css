@@ -47,7 +47,7 @@ th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(
 th { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 .revs { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
 .revs input { font: inherit; padding: 0.2rem 0.4rem; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; width: 12em; }
-.diagram { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 1rem; overflow-x: auto; margin-bottom: 1rem; }
+.diagram { width: fit-content; max-width: 100%; box-sizing: border-box; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 1rem; overflow-x: auto; margin-bottom: 1rem; }
 .diagram svg { max-width: 100%; height: auto; }
 .badge { display: inline-block; padding: 0 0.5em; border-radius: 999px; font-size: 0.8em; font-weight: 600; color: #fff; }
 .v-safe { background: var(--safe); } .v-risky { background: var(--risky); } .v-breaking { background: var(--breaking); }
@@ -55,3 +55,6 @@ th { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.08em; color
 .lvl { font: 600 0.75em ui-monospace, monospace; }
 .lvl-error { color: var(--breaking); } .lvl-warning { color: var(--risky); } .lvl-info { color: var(--muted); }
 .revs input.view { width: 10em; font-size: 0.85em; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md code { font-size: 0.9em; background: var(--line); padding: 0 0.25em; border-radius: 3px; }

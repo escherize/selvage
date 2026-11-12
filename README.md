@@ -113,6 +113,8 @@ go run . check -repo DIR -base origin/main      # exit 1 on a breaking edge
 
 `head` defaults to the working tree. In the UI, set `base`/`head` to any git revision.
 
+Spec pages show each operation's full path (the `servers[0]` path plus the operation path) and render descriptions as Markdown. Raw HTML in a description is dropped.
+
 Contracts that live elsewhere in a repo: `-specs`, `-flows` and `-config` take paths relative to `-repo`:
 
 ```
@@ -137,6 +139,14 @@ schema:
 ```
 
 A consumer that reads `name` is then breaking in the `master,hardening` view. In the UI, the `base`/`head` view boxes take the same lists.
+
+## Static site
+
+```
+selvage export -repo . -base origin/main -out site/
+```
+
+`export` writes every page for one base/head comparison as plain HTML with relative links, so the site works from a subpath, a file share or `file://`. It takes the same layout, `-base`/`-head` and view flags as `check`; `-base` defaults to `HEAD`. To show another comparison, export again.
 
 ## Demo
 
