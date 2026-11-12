@@ -30,7 +30,7 @@ orders -> payments: chargeCard {chargeId}
 web -> orders: getOrder {status, total.amount}
 ```
 
-Each step is `consumer -> provider: operationId {fields read from the 2xx JSON response} STATUS {fields read from that response} <- {fields sent in the JSON request body}`. Every list is optional; the sent list comes last. `409 {error.code}` says the consumer branches on that field of the 409 body; repeat it for other status codes. Field paths use dots. Arrays are traversed implicitly.
+Each step is `consumer -> provider: operationId {fields read from the 2xx JSON response} STATUS {fields read from that response} <- {fields sent in the JSON request body}`. Every list is optional; the sent list comes last. `409 {error.code}` says the consumer branches on that field of the 409 body; repeat it for other statuses. A status is a code, a range (`4XX`) or `default`. Field paths use dots. Arrays are traversed implicitly.
 
 ## API linting: how each step is checked
 
@@ -44,7 +44,7 @@ flowchart TD
   O -- no --> X
   O -- yes --> F{"each read field in the 2xx response?"}
   F -- "a field is missing" --> B["breaking finding"]
-  F --> E{"each STATUS {...} declared, with its fields?"}
+  F --> E{"each STATUS {...} covered by a response, with its fields?"}
   E -- "a status or field is missing" --> B
   E --> Q{"each sent field in the JSON request body?"}
   Q -- "a field is missing" --> B
@@ -64,7 +64,7 @@ flowchart TD
 1. **The provider has a spec.** No spec for the service: breaking.
 2. **The operation exists.** `operationId` is not in the provider's spec: breaking ("removed or renamed?"). A flow that documents a proposed operation shows as breaking until the operation lands in the spec.
 3. **The fields the consumer reads exist.** Each field in `{...}` must be in the operation's 2xx response schema; dots walk nested objects and arrays are traversed implicitly. A missing field: breaking.
-4. **The error bodies the consumer handles exist.** For each `STATUS {...}`, the operation must declare that status, and each field must be in its `application/json` schema. An undeclared status or a missing field: breaking.
+4. **The other responses the consumer handles exist.** For each `STATUS {...}`, a response must cover that status (its own entry, else its range such as `4XX`, else `default`), and each field must be in that response's `application/json` schema. An uncovered status or a missing field: breaking.
 5. **The fields the consumer sends exist.** Each field in `<- {...}` must be in the operation's `application/json` request body schema, walked the same way. A missing field: breaking (`web sends "coupon", which is not in the createOrder request body`).
 6. **No spec change hurts this consumer.** selvage runs oasdiff between the base and head revision of each spec. Every change on the step's method and path gets a verdict for this consumer from the verdict rules below. With `reads`, a change is breaking only for consumers that read the property it names, so the same change can break one flow and be safe for another. `sends` and `omits` do the same for request properties.
 
@@ -72,7 +72,7 @@ A step's verdict is the worst of its findings; the report's verdict is the worst
 
 What it does not check:
 
-- Changes to error bodies: `STATUS {...}` fields are checked for existence at the head revision. The `reads` rule matches only the 2xx field list, so a new enum value on an error field gets oasdiff's level.
+- Which response a change is in: the `reads` rule matches a changed property against every field the step reads, from any status. A step that reads `code` from the 409 is also flagged for a change to `code` in the 200.
 - Requests without `<- {...}`: a step that doesn't list what it sends gets oasdiff's levels for request changes.
 - Parameters and non-JSON bodies: path, query and header parameters, and request bodies that aren't `application/json`, are judged only through oasdiff's levels.
 - Request values: a sent field is checked for existence, not its type, enum or format. A changed type or a removed enum value on a sent property gets oasdiff's level.

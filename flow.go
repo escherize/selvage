@@ -20,10 +20,20 @@ type Step struct {
 	Sends       []string
 }
 
-// StatusRead is the fields a consumer reads from the response with one status code.
+// StatusRead is the fields a consumer reads from one response: a status code
+// ("409"), a range ("4XX") or "default", as OpenAPI keys responses.
 type StatusRead struct {
 	Code   string
 	Fields []string
+}
+
+// allReads is every response field the step reads, from any status.
+func (s Step) allReads() []string {
+	out := append([]string(nil), s.Fields...)
+	for _, sr := range s.Status {
+		out = append(out, sr.Fields...)
+	}
+	return out
 }
 
 type Flow struct {
@@ -32,9 +42,9 @@ type Flow struct {
 	Steps []Step
 }
 
-var stepRe = regexp.MustCompile(`^(\S+)\s*->\s*(\S+)\s*:\s*([A-Za-z0-9_.\-]+)\s*(?:\{([^}]*)\})?((?:\s*[1-5][0-9]{2}\s*\{[^}]*\})*)\s*(?:<-\s*\{([^}]*)\})?\s*$`)
+var stepRe = regexp.MustCompile(`^(\S+)\s*->\s*(\S+)\s*:\s*([A-Za-z0-9_.\-]+)\s*(?:\{([^}]*)\})?((?:\s*(?:[1-5](?:[0-9]{2}|XX)|default)\s*\{[^}]*\})*)\s*(?:<-\s*\{([^}]*)\})?\s*$`)
 
-var statusRe = regexp.MustCompile(`([1-5][0-9]{2})\s*\{([^}]*)\}`)
+var statusRe = regexp.MustCompile(`([1-5](?:[0-9]{2}|XX)|default)\s*\{([^}]*)\}`)
 
 // ParseFlow parses the plaintext flow format:
 //
@@ -43,7 +53,8 @@ var statusRe = regexp.MustCompile(`([1-5][0-9]{2})\s*\{([^}]*)\}`)
 //	orders -> payments: chargeCard {chargeId}
 //
 // "{...}" lists the 2xx response fields the consumer reads; "409 {...}" (any
-// number, one per status code) lists fields it reads from that response;
+// number; a code, a range like 4XX, or default) lists fields it reads from
+// that response;
 // "<- {...}" (optional, last) lists the request-body fields it sends.
 // A leading "# " line is the title; blank lines and "//" comments are ignored.
 func ParseFlow(name, src string) (Flow, error) {

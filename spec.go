@@ -69,17 +69,25 @@ func successSchema(o *openapi3.Operation) (status string, s *openapi3.SchemaRef)
 	return "", nil
 }
 
-// statusSchema returns the application/json schema of the response with exactly
-// this status code. declared is false when the operation has no such response.
+// statusSchema returns the application/json schema of the response that covers
+// this status: its own entry, else its range ("4XX"), else "default", as
+// OpenAPI resolves them. declared is false when no response covers it.
 func statusSchema(o *openapi3.Operation, code string) (s *openapi3.SchemaRef, declared bool) {
-	r := o.Responses.Map()[code]
-	if r == nil || r.Value == nil {
-		return nil, false
+	keys := []string{code, "default"}
+	if len(code) == 3 && code[1:] != "XX" {
+		keys = []string{code, code[:1] + "XX", "default"}
 	}
-	if mt := r.Value.Content.Get("application/json"); mt != nil {
-		return mt.Schema, true
+	for _, k := range keys {
+		r := o.Responses.Map()[k]
+		if r == nil || r.Value == nil {
+			continue
+		}
+		if mt := r.Value.Content.Get("application/json"); mt != nil {
+			return mt.Schema, true
+		}
+		return nil, true
 	}
-	return nil, true
+	return nil, false
 }
 
 // requestSchema returns the application/json request body schema, or nil.

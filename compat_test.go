@@ -550,3 +550,49 @@ paths:
 		}
 	}
 }
+
+// A status is covered by its own response, else its range, else default.
+func TestStatusRangeAndDefault(t *testing.T) {
+	f, err := ParseFlow("f", "web -> svc: op {id} 4XX {error.code} default {msg}\n")
+	if err != nil || len(f.Steps[0].Status) != 2 || f.Steps[0].Status[0].Code != "4XX" || f.Steps[0].Status[1].Code != "default" {
+		t.Fatalf("parse: %v %+v", err, f.Steps)
+	}
+	body := `{description: e, content: {application/json: {schema: {type: object, properties: {error: {type: object, properties: {code: {type: string}}}}}}}}`
+	load1 := func(responses string) *openapi3.T {
+		spec, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    get:
+      operationId: op
+      responses: {"200": {description: ok}, `+responses+`}
+`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return spec
+	}
+	for _, c := range []struct {
+		responses, code string
+		declared, field bool
+	}{
+		{`"4XX": ` + body, "409", true, true},
+		{`default: ` + body, "500", true, true},
+		{`"409": {description: bare}, "4XX": ` + body, "409", true, false}, // the exact entry wins
+		{`"4XX": ` + body, "500", false, false},
+		{`"4XX": ` + body, "4XX", true, true},
+		{`default: ` + body, "default", true, true},
+	} {
+		op, _ := findOp(load1(c.responses), "op")
+		s, declared := statusSchema(op.Op, c.code)
+		if declared != c.declared || hasField(s, "error.code") != c.field {
+			t.Errorf("%s with {%s}: declared=%v field=%v", c.code, c.responses[:6], declared, hasField(s, "error.code"))
+		}
+	}
+
+	// The reads rule sees fields read from a status, not only the 2xx list.
+	if !readsAny(Step{Status: []StatusRead{{"409", []string{"error.code"}}}}, []any{"error/code"}) {
+		t.Error("a change to error.code must count for a step with 409 {error.code}")
+	}
+}
