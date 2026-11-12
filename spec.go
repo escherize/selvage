@@ -48,11 +48,20 @@ func pathPrefix(t *openapi3.T) string {
 	if len(t.Servers) == 0 {
 		return ""
 	}
-	return strings.TrimSuffix(serverOrigin.ReplaceAllString(t.Servers[0].URL, ""), "/")
+	p := serverOrigin.ReplaceAllString(t.Servers[0].URL, "")
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	p = strings.Trim(p, "/")
+	if p == "" {
+		return ""
+	}
+	return "/" + p
 }
 
-// A leading "{var}" or "scheme://host" is the origin; the rest is the path.
-var serverOrigin = regexp.MustCompile(`^(\{[^}]*\}|[a-zA-Z][a-zA-Z0-9+.-]*://[^/]*)`)
+// The origin is "scheme://host" (either part may be a {variable}), "//host", or a
+// leading {variable} that stands for the whole origin. The rest is the path.
+var serverOrigin = regexp.MustCompile(`^(?:[^/?#]*:)?//[^/?#]*|^\{[^}]*\}`)
 
 func findOp(t *openapi3.T, id string) (Op, bool) {
 	for _, o := range operations(t) {

@@ -113,7 +113,7 @@ go run . check -repo DIR -base origin/main      # exit 1 on a breaking edge
 
 `head` defaults to the working tree. In the UI, set `base`/`head` to any git revision.
 
-Spec pages show each operation's full path (the `servers[0]` path plus the operation path) and render descriptions as Markdown. Raw HTML in a description is dropped.
+Spec pages show each operation's full path (the `servers[0]` path plus the operation path) and render descriptions as Markdown. Raw HTML and images in a description are dropped.
 
 Contracts that live elsewhere in a repo: `-specs`, `-flows` and `-config` take paths relative to `-repo`:
 

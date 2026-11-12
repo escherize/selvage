@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -178,8 +179,12 @@ func markdown(s string) template.HTML {
 	if err := goldmark.Convert([]byte(s), &b); err != nil {
 		return template.HTML(template.HTMLEscapeString(s))
 	}
-	return template.HTML(b.String())
+	// Images are dropped to their alt text: a remote image in a contributor's
+	// spec would make every viewer's browser fetch a URL the contributor chose.
+	return template.HTML(mdImage.ReplaceAllString(b.String(), "$1"))
 }
+
+var mdImage = regexp.MustCompile(`<img src="[^"]*" alt="([^"]*)"[^>]*>`)
 
 // render writes the full page, or only `fragment` when htmx asked for it.
 func render(w http.ResponseWriter, r *http.Request, page, fragment string, data map[string]any) {

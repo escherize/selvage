@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -16,7 +17,8 @@ var (
 	hxAttr   = regexp.MustCompile(`\s+hx-[a-z-]+="[^"]*"`)
 	htmxTag  = regexp.MustCompile(`<script src="/static/htmx\.min\.js"></script>\n?`)
 	revsForm = regexp.MustCompile(`(?s)<form class="revs".*?</form>`)
-	rootLink = regexp.MustCompile(`(href|src)="/([^"?]*)(\?[^"]*)?"`)
+	// Root-relative only: "/x?q#f". "//host/x" is protocol-relative and is left alone.
+	rootLink = regexp.MustCompile(`(href|src)="/([^"/?#][^"?#]*|)(\?[^"#]*)?(#[^"]*)?"`)
 )
 
 // export renders every page for one base/head pair into dir as plain HTML.
@@ -43,23 +45,42 @@ func export(l Layout, base, head Ref, dir string) error {
 		pages["/flow/"+f.Name] = "?" + cmp
 	}
 
+	// Render everything before writing anything, so a page that fails leaves no partial site.
 	h := routes(l)
+	rendered := map[string]string{} // file -> html
+	var failed []string
 	for p, q := range pages {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest("GET", p+q, nil))
+		h.ServeHTTP(rec, httptest.NewRequest("GET", escapeRoute(p)+q, nil))
 		if rec.Code != http.StatusOK {
-			return fmt.Errorf("%s: HTTP %d: %s", p, rec.Code, strings.TrimSpace(rec.Body.String()))
+			// e.g. an operationId containing "/" or "..", which has no URL of its own.
+			failed = append(failed, fmt.Sprintf("%s: HTTP %d", p, rec.Code))
+			continue
 		}
-		file := pageFile(p)
+		rendered[pageFile(p)] = rec.Body.String()
+	}
+	if len(failed) > 0 {
+		sort.Strings(failed)
+		return fmt.Errorf("cannot export, nothing written:\n  %s", strings.Join(failed, "\n  "))
+	}
+	for file, html := range rendered {
 		up := strings.Repeat("../", strings.Count(file, "/"))
-		html := revsForm.ReplaceAllString(htmxTag.ReplaceAllString(hxAttr.ReplaceAllString(rec.Body.String(), ""), ""), "")
+		html = revsForm.ReplaceAllString(htmxTag.ReplaceAllString(hxAttr.ReplaceAllString(html, ""), ""), "")
 		html = rootLink.ReplaceAllStringFunc(html, func(m string) string {
 			s := rootLink.FindStringSubmatch(m)
-			target := s[2]
+			target, err := url.PathUnescape(s[2])
+			if err != nil {
+				return m
+			}
 			if !strings.HasPrefix(target, "static/") {
 				target = pageFile("/" + target)
+				// Not one of ours (a Markdown link to "/docs", an operation missing
+				// from this view): leave it as the author wrote it.
+				if _, ok := rendered[target]; !ok {
+					return m
+				}
 			}
-			return s[1] + `="` + up + target + `"`
+			return s[1] + `="` + up + (&url.URL{Path: target}).EscapedPath() + s[4] + `"`
 		})
 		if err := writeFile(filepath.Join(dir, file), []byte(html)); err != nil {
 			return err
@@ -75,6 +96,15 @@ func export(l Layout, base, head Ref, dir string) error {
 		}
 		return writeFile(filepath.Join(dir, p), data)
 	})
+}
+
+// escapeRoute escapes each path segment, so a name with a space or "%" is a valid request target.
+func escapeRoute(route string) string {
+	segs := strings.Split(route, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return strings.Join(segs, "/")
 }
 
 // pageFile maps a route to its file: "/" -> "index.html", "/spec/parent" -> "spec/parent.html".
