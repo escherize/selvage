@@ -5,6 +5,8 @@ go 1.26.3
 require (
 	github.com/getkin/kin-openapi v0.153.0
 	github.com/oasdiff/oasdiff v1.37.0
+	github.com/yuin/goldmark v1.8.7
+	go.yaml.in/yaml/v3 v3.0.6
 	oss.terrastruct.com/d2 v0.7.2
 	oss.terrastruct.com/util-go v0.1.0
 )
@@ -32,8 +34,6 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/wI2L/jsondiff v0.7.1 // indirect
 	github.com/yargevad/filepathx v1.0.0 // indirect
-	github.com/yuin/goldmark v1.8.7 // indirect
-	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	go.yaml.in/yaml/v4 v4.0.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
 	golang.org/x/image v0.20.0 // indirect
