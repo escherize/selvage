@@ -102,7 +102,7 @@ func checkStep(flow string, s Step, head Snapshot, changes checker.Changes) Edge
 			}
 		}
 	}
-	// The same for every field the consumer sends: it must be in the JSON request body.
+	// The same for every field the consumer sends: it must be in the request body.
 	req := requestSchema(op.Op)
 	for _, f := range s.Sends {
 		if !hasField(req, f) {

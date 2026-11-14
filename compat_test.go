@@ -711,3 +711,90 @@ paths:
 		t.Error("a change to error.code must count for a step with 409 {error.code}")
 	}
 }
+
+// A body described only under a non-JSON media type is still checked.
+func TestNonJSONBody(t *testing.T) {
+	spec, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /c:
+    put:
+      operationId: putC
+      requestBody: {content: {application/x-yaml: {schema: {type: object, properties: {sent: {type: string}}}}}}
+      responses:
+        "200":
+          description: ok
+          content:
+            text/plain: {}
+            application/x-yaml: {schema: {type: object, properties: {yaml: {type: string}}}}
+            application/json: {schema: {type: object, properties: {json: {type: string}}}}
+        "201": {description: ok, content: {application/x-yaml: {schema: {type: object, properties: {yaml: {type: string}}}}}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _ := findOp(spec, "putC")
+	if _, s := successSchema(op.Op); !hasField(s, "json") {
+		t.Error("application/json must win when it has a schema")
+	}
+	if s, _ := statusSchema(op.Op, "201"); !hasField(s, "yaml") {
+		t.Error("201: want the application/x-yaml schema")
+	}
+	if !hasField(requestSchema(op.Op), "sent") {
+		t.Error("request: want the application/x-yaml schema")
+	}
+}
+
+// Error bodies are often application/problem+json; status reads must see them.
+func TestProblemJSONStatus(t *testing.T) {
+	spec, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    get:
+      operationId: op
+      responses:
+        "200": {description: ok}
+        "422": {description: bad, content: {application/problem+json: {schema: {type: object, properties: {detail: {type: string}}}}}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _ := findOp(spec, "op")
+	if s, declared := statusSchema(op.Op, "422"); !declared || !hasField(s, "detail") {
+		t.Error("422 application/problem+json: field not found")
+	}
+}
+
+// A non-JSON 2xx must not hide a later JSON 2xx, and JSON-like media types win over the name-order fallback.
+func TestBodySchemaPrefersJSON(t *testing.T) {
+	obj := func(prop string) string {
+		return `{schema: {type: object, properties: {` + prop + `: {type: string}}}}`
+	}
+	bin := `{schema: {type: string, format: binary}}`
+	for name, c := range map[string]struct{ responses, status string }{
+		"binary 200, JSON 201":   {`"200": {description: d, content: {application/octet-stream: ` + bin + `}}, "201": {description: d, content: {application/json: ` + obj("id") + `}}`, "201"},
+		"schemaless JSON 200":    {`"200": {description: d, content: {application/json: {}, text/csv: {schema: {type: string}}}}, "201": {description: d, content: {application/json: ` + obj("id") + `}}`, "201"},
+		"json with charset":      {`"200": {description: d, content: {"application/json; charset=utf-8": ` + obj("id") + `, application/a-first: ` + obj("zzz") + `}}`, "200"},
+		"vendor +json vs binary": {`"200": {description: d, content: {application/octet-stream: ` + bin + `, application/vnd.api+json: ` + obj("id") + `}}`, "200"},
+	} {
+		spec, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    get:
+      operationId: op
+      responses: {`+c.responses+`}
+`))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		op, _ := findOp(spec, "op")
+		if status, s := successSchema(op.Op); status != c.status || !hasField(s, "id") {
+			t.Errorf("%s: picked %s, id=%v; want %s with id", name, status, hasField(s, "id"), c.status)
+		}
+	}
+}
