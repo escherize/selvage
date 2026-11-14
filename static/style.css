@@ -58,6 +58,9 @@ figure.diagram { margin-left: 0; margin-right: 0; }
 .diagram figcaption { color: #6b6b70; font-size: 0.85em; max-width: 60ch; margin-top: 0.5rem; }
 .badge { display: inline-block; padding: 0 0.5em; border-radius: 999px; font-size: 0.8em; font-weight: 600; color: #fff; }
 .v-safe { background: var(--safe); } .v-risky { background: var(--risky); } .v-breaking { background: var(--breaking); }
+.fold > summary { cursor: pointer; color: var(--muted); padding: 0.3rem 0; }
+.fold > summary:hover, .fold[open] > summary { color: var(--fg); }
+.fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 .finding { font-size: 0.85em; color: var(--muted); margin-top: 0.2rem; }
 .lvl { font: 600 0.75em ui-monospace, monospace; }
 .lvl-error { color: var(--breaking); } .lvl-warning { color: var(--risky); } .lvl-info { color: var(--muted); }

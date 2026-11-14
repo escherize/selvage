@@ -1302,3 +1302,81 @@ func TestIndexUncalledService(t *testing.T) {
 		t.Errorf("used row: %s", r)
 	}
 }
+
+// The Changes page leads with the calls that have problems and folds the safe ones away.
+func TestChangesPageLeadsWithProblems(t *testing.T) {
+	dir := overlay(t, "example/v1", "example/v1")
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@localhost",
+			"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	get := func() string {
+		rec := httptest.NewRecorder()
+		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", "/diff", nil))
+		if rec.Code != 200 {
+			t.Fatalf("HTTP %d", rec.Code)
+		}
+		return rec.Body.String()
+	}
+	git("init", "-q")
+	git("add", "-A")
+	git("commit", "-qm", "v1")
+
+	// Nothing changed: no problems section, and the safe calls are shown open.
+	body := get()
+	edges := len(runCheck(layoutOf(dir), ParseRef("HEAD", ""), Ref{}, false).Edges)
+	if !strings.Contains(body, "No call breaks") || strings.Contains(body, "Calls with problems") ||
+		!strings.Contains(body, `<details class="fold" open>`) || !strings.Contains(body, fmt.Sprintf("<summary>%d safe calls</summary>", edges)) {
+		t.Errorf("unchanged tree: want an open list of %d safe calls and no problems section", edges)
+	}
+
+	// v2 breaks callers: problems come first and the safe calls are folded.
+	err := filepath.WalkDir("example/v2", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel("example/v2", p)
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, rel), data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = get()
+	r := runCheck(layoutOf(dir), ParseRef("HEAD", ""), Ref{}, false)
+	breaking, safe := 0, 0
+	for _, e := range r.Edges {
+		switch e.Verdict {
+		case "breaking":
+			breaking++
+		case "safe":
+			safe++
+		}
+	}
+	problems, fold := strings.Index(body, "Calls with problems"), strings.Index(body, `<details class="fold">`)
+	if breaking == 0 || safe == 0 || problems < 0 || fold < problems {
+		t.Fatalf("want problems (%d) before a closed fold (%d); check reports %d breaking, %d safe", problems, fold, breaking, safe)
+	}
+	if !strings.Contains(body, fmt.Sprintf("%d calls break", breaking)) || !strings.Contains(body, fmt.Sprintf("out of %d", len(r.Edges))) {
+		t.Errorf("summary does not say %d calls break out of %d", breaking, len(r.Edges))
+	}
+	if n := strings.Count(body[problems:fold], `class="badge v-breaking"`); n != breaking {
+		t.Errorf("problems section lists %d breaking calls, check reports %d", n, breaking)
+	}
+	if strings.Contains(body[problems:fold], `class="badge v-safe"`) || strings.Contains(body[fold:], `class="badge v-breaking"`) {
+		t.Error("a safe call is in the problems section, or a breaking call is in the fold")
+	}
+
+	// No flows: the page must not read as a pass.
+	os.RemoveAll(filepath.Join(dir, "flows"))
+	if body := get(); !strings.Contains(body, "no call is checked") || strings.Contains(body, "No call breaks") {
+		t.Error("with no flows the summary must say nothing is checked")
+	}
+}
