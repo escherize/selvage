@@ -2,6 +2,7 @@ package main
 
 import (
 	"io/fs"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -798,6 +799,49 @@ paths:
 			t.Errorf("%s: picked %s, id=%v; want %s with id", name, status, hasField(s, "id"), c.status)
 		}
 	}
+}
+
+// A step whose operation the page's view lacks is plain text; the others link into the same view.
+func TestFlowLinksStayInView(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "specs"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "flows"), 0o755)
+	os.WriteFile(filepath.Join(dir, "specs", "svc.yaml"), []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /a: {get: {operationId: getA, responses: {"200": {description: ok}}}}
+  /b: {get: {operationId: getB, x-status: proposed, responses: {"200": {description: ok}}}}
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "flows", "f.flow"), []byte("web -> svc: getA\nweb -> svc: getB\nweb -> nope: getC\n"), 0o644)
+	get := func(target string) string {
+		rec := httptest.NewRecorder()
+		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != 200 {
+			t.Fatalf("%s: HTTP %d", target, rec.Code)
+		}
+		return rec.Body.String()
+	}
+
+	body := get("/flow/f?head_view=master")
+	for _, want := range []string{
+		`href="/spec/svc/op/getA?rev=&amp;view=master"`, // same view as the flow page
+		`<span title="not in working tree [master]">svc.getB</span>`,
+		`<span title="not in working tree [master]">nope.getC</span>`, // no spec for the service
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("view master: want %s", want)
+		}
+	}
+	if strings.Contains(body, `op/getB`) || strings.Contains(body, `op/getC`) {
+		t.Error("view master: a missing operation is still linked")
+	}
+	// With no view the proposed operation exists, so it is linked.
+	if body := get("/flow/f"); !strings.Contains(body, `href="/spec/svc/op/getB?rev=&amp;view="`) {
+		t.Error("no view: getB should be linked")
+	}
+	// The linked page exists in that view; the unlinked one would not.
+	get("/spec/svc/op/getA?rev=&view=master")
 }
 
 // An operation counts as covered when any flow has a step for that service and operationId.
