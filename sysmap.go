@@ -43,27 +43,54 @@ func SystemMap(results []EdgeResult) []MapEdge {
 	return out
 }
 
+// The map is capped on both parties and arrows. D2's layout time grows fast
+// with either (minutes at 200 parties and 400 arrows) and it runs under the
+// diagram lock, so a larger system gets the tables without the picture.
+// ponytail: fixed caps; group parties into clusters if maps this big matter.
+const (
+	maxMapParties = 40
+	maxMapEdges   = 80
+)
+
+// mapParties counts the distinct parties on the map.
+func mapParties(edges []MapEdge) int {
+	seen := map[string]bool{}
+	for _, e := range edges {
+		seen[e.Consumer], seen[e.Provider] = true, true
+	}
+	return len(seen)
+}
+
+// mapTooBig reports whether the map is over either cap.
+func mapTooBig(edges []MapEdge) bool {
+	return len(edges) > maxMapEdges || mapParties(edges) > maxMapParties
+}
+
 // mapD2 draws the system map as D2 source: callers on the left, the services
 // they call on the right. hasSpec marks the services this contract describes;
 // a party without a spec is drawn plainer. Pure.
+//
+// Names come from flow files, which are untrusted. D2's dagre layout pastes
+// node ids into JavaScript that it executes, so a name is never an id: nodes
+// get generated ids (n0, n1, ...) and carry the name as a label only.
 func mapD2(edges []MapEdge, hasSpec map[string]bool) string {
 	var b strings.Builder
 	b.WriteString("direction: right\n")
-	seen := map[string]bool{}
-	node := func(name string) {
-		if seen[name] {
-			return
+	ids := map[string]string{}
+	id := func(name string) string {
+		if ids[name] == "" {
+			ids[name] = "n" + strconv.Itoa(len(ids))
+			style := `style.fill: "#ffffff"; style.stroke: "#6b6b70"; style.stroke-dash: 3`
+			if hasSpec[name] {
+				style = `style.fill: "#eef2ff"; style.stroke: "#3b5bdb"`
+			}
+			fmt.Fprintf(&b, "%s: %s {%s}\n", ids[name], d2Label(name), style)
 		}
-		seen[name] = true
-		if hasSpec[name] {
-			fmt.Fprintf(&b, "%s: {style.fill: \"#eef2ff\"; style.stroke: \"#3b5bdb\"}\n", strconv.Quote(name))
-		} else {
-			fmt.Fprintf(&b, "%s: {style.fill: \"#ffffff\"; style.stroke: \"#6b6b70\"; style.stroke-dash: 3}\n", strconv.Quote(name))
-		}
+		return ids[name]
 	}
 	for _, e := range edges {
-		node(e.Consumer)
-		node(e.Provider)
+		id(e.Consumer)
+		id(e.Provider)
 	}
 	for _, e := range edges {
 		label := fmt.Sprintf("%d operations", e.Operations)
@@ -74,9 +101,16 @@ func mapD2(edges []MapEdge, hasSpec map[string]bool) string {
 			label += ", " + e.Verdict.String()
 		}
 		fmt.Fprintf(&b, "%s -> %s: %s {style.stroke: %q; style.stroke-width: 2}\n",
-			strconv.Quote(e.Consumer), strconv.Quote(e.Provider), strconv.Quote(label), verdictColor[e.Verdict])
+			id(e.Consumer), id(e.Provider), d2Label(label), verdictColor[e.Verdict])
 	}
 	return b.String()
+}
+
+// d2Label quotes text as a D2 single-quoted string, which D2 takes literally:
+// no ${} substitution and no escapes except ” for a quote.
+func d2Label(s string) string {
+	s = strings.NewReplacer("\n", " ", "\r", " ").Replace(s)
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 // FlowRow is one flow as the index lists it.

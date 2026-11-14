@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/oasdiff/oasdiff/load"
@@ -1063,7 +1064,8 @@ func TestSystemMap(t *testing.T) {
 		t.Errorf("got %+v\nwant %+v", got, want)
 	}
 	src := mapD2(got, map[string]bool{"orders": true, "payments": true})
-	for _, s := range []string{`"web" -> "payments": "1 operation, breaking"`, `"web" -> "orders": "2 operations, risky"`, `"orders" -> "payments": "1 operation"`} {
+	// orders=n0, payments=n1, web=n2, in edge order
+	for _, s := range []string{`n2 -> n1: '1 operation, breaking'`, `n2 -> n0: '2 operations, risky'`, `n0 -> n1: '1 operation'`, `n0: 'orders'`} {
 		if !strings.Contains(src, s) {
 			t.Errorf("D2 source lacks %s:\n%s", s, src)
 		}
@@ -1133,6 +1135,60 @@ func TestIndexCompares(t *testing.T) {
 	}
 	if !strings.Contains(body, "breaking&#34;") && !strings.Contains(body, ", breaking") {
 		t.Error("the map has no breaking arrow")
+	}
+}
+
+// Party names come from flow files, which may be a contributor's branch. D2's
+// layout pastes node ids into JavaScript it runs, so a name must never be an id.
+func TestSystemMapNamesAreNotCode(t *testing.T) {
+	for _, name := range []string{
+		"x${(()=>{throw new Error('JS_RAN_42')})()}", // would run in the layout engine
+		"a`b", "${x}", `a"b`, `a\b`, "it's", "a;b{c}->d", "<script>alert(1)</script>",
+	} {
+		svg, err := renderSVG(mapD2([]MapEdge{{name, "svc", 1, Safe}, {"web", name, 2, Breaking}}, map[string]bool{"svc": true}))
+		if err != nil {
+			t.Errorf("%q: %v", name, err)
+			continue
+		}
+		if strings.Contains(string(svg), "<script>alert") {
+			t.Errorf("%q: unescaped in the SVG", name)
+		}
+	}
+	// The source uses generated ids; names appear only as quoted labels.
+	src := mapD2([]MapEdge{{"web", "orders", 1, Safe}}, nil)
+	if !strings.Contains(src, "n0 -> n1") || strings.Contains(src, "web ->") || strings.Contains(src, `"web" ->`) {
+		t.Errorf("names used as ids:\n%s", src)
+	}
+}
+
+// A map too large to lay out quickly is omitted: too many parties, or too many arrows between few parties.
+func TestSystemMapCap(t *testing.T) {
+	var wide []MapEdge // one caller, many services
+	for i := 0; i < maxMapParties; i++ {
+		wide = append(wide, MapEdge{Consumer: "web", Provider: fmt.Sprintf("svc%d", i), Operations: 1})
+	}
+	if !mapTooBig(wide) || mapTooBig(wide[:maxMapParties-1]) {
+		t.Errorf("party cap: %d parties too big = %v, %d parties too big = %v",
+			mapParties(wide), mapTooBig(wide), mapParties(wide[:maxMapParties-1]), mapTooBig(wide[:maxMapParties-1]))
+	}
+	var dense []MapEdge // few parties, every one calling every other
+	for i := 0; i < 10; i++ {
+		for j := 0; j < 10; j++ {
+			dense = append(dense, MapEdge{Consumer: fmt.Sprintf("c%d", i), Provider: fmt.Sprintf("p%d", j), Operations: 1})
+		}
+	}
+	if mapParties(dense) > maxMapParties || !mapTooBig(dense) || mapTooBig(dense[:maxMapEdges]) {
+		t.Errorf("arrow cap: %d arrows among %d parties too big = %v", len(dense), mapParties(dense), mapTooBig(dense))
+	}
+	// The largest map still drawn must lay out quickly; it runs under the diagram lock.
+	start := time.Now()
+	if _, err := renderSVG(mapD2(dense[:maxMapEdges], nil)); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("a map at the arrow cap took %s to lay out", d)
+	} else {
+		t.Logf("map at the arrow cap (%d arrows, %d parties): %s", maxMapEdges, mapParties(dense[:maxMapEdges]), d.Round(time.Millisecond))
 	}
 }
 
