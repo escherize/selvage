@@ -960,25 +960,23 @@ func TestCheckJSON(t *testing.T) {
 	}
 }
 
-// -fail-uncovered: uncovered operations are in the report and make it exit 1.
+// uncovered is always listed; -fail-uncovered only decides whether it fails the check.
 func TestCheckJSONUncovered(t *testing.T) {
 	dir := overlay(t, "example/v1", "example/v1")
 	os.WriteFile(filepath.Join(dir, "flows", "refund.flow"), []byte("support -> payments: chargeCard\n"), 0o644)
-	git := exec.Command("git", "-C", dir, "init", "-q")
-	if out, err := git.CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v\n%s", err, out)
-	}
 	// Base is the working tree itself: nothing changed, so only coverage can fail the check.
-	if r := runCheck(layoutOf(dir), Ref{}, Ref{}, false); r.Exit != 0 || len(r.Uncovered) != 0 {
-		t.Fatalf("without the flag: exit %d, uncovered %v", r.Exit, r.Uncovered)
+	off := runCheck(layoutOf(dir), Ref{}, Ref{}, false)
+	on := runCheck(layoutOf(dir), Ref{}, Ref{}, true)
+	if off.Exit != 0 || on.Exit != 1 || on.Verdict != "safe" {
+		t.Fatalf("exit without the flag %d (want 0), with it %d (want 1), verdict %q", off.Exit, on.Exit, on.Verdict)
 	}
-	r := runCheck(layoutOf(dir), Ref{}, Ref{}, true)
-	if r.Exit != 1 || r.Verdict != "safe" || len(r.Uncovered) == 0 {
-		t.Fatalf("with the flag: %+v", r)
+	// refund.flow no longer calls getCharge, so it is the one uncovered operation, flag or not.
+	data, _ := json.Marshal(off.Uncovered)
+	want := `[{"service":"payments","method":"GET","path":"/charges/{chargeId}","operation":"getCharge"}]`
+	if string(data) != want {
+		t.Errorf("uncovered without the flag:\n got %s\nwant %s", data, want)
 	}
-	for _, u := range r.Uncovered {
-		if u.Operation == "chargeCard" || u.Service == "" || u.Method == "" || u.Path == "" {
-			t.Errorf("bad uncovered entry %+v", u)
-		}
+	if !reflect.DeepEqual(off.Uncovered, on.Uncovered) {
+		t.Errorf("the flag changed the list: %v vs %v", off.Uncovered, on.Uncovered)
 	}
 }

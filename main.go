@@ -192,7 +192,7 @@ type checkReport struct {
 	Error   string      `json:"error,omitempty"` // set when exit is 2
 	Errors  []string    `json:"errors"`          // head files that failed to load
 	Edges   []checkEdge `json:"edges"`           // one per flow step, worst first
-	// Operations no flow calls; filled only with -fail-uncovered, which makes any entry exit 1.
+	// Operations no flow calls. Always filled; an entry makes exit 1 only with -fail-uncovered.
 	Uncovered []checkUncovered `json:"uncovered"`
 }
 
@@ -242,12 +242,11 @@ func runCheck(l Layout, base, head Ref, failUncovered bool) checkReport {
 		r.Edges = append(r.Edges, ce)
 	}
 	r.Verdict = worst(c.Edges).String()
-	if failUncovered {
-		for _, u := range uncovered(Coverage(c.Head)) {
-			r.Uncovered = append(r.Uncovered, checkUncovered{u.Service, u.Op.Method, u.Op.Path, u.Op.ID})
-		}
+	// Always listed, so an empty list means "all covered" and never "not computed".
+	for _, u := range uncovered(Coverage(c.Head)) {
+		r.Uncovered = append(r.Uncovered, checkUncovered{u.Service, u.Op.Method, u.Op.Path, u.Op.ID})
 	}
-	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking || len(r.Uncovered) > 0 {
+	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking || (failUncovered && len(r.Uncovered) > 0) {
 		r.Exit = 1
 	}
 	return r
@@ -272,6 +271,9 @@ func check(l Layout, base, head Ref, asJSON, failUncovered bool) int {
 		}
 	}
 	for _, u := range r.Uncovered {
+		if !failUncovered { // text mode reports coverage only when asked to gate on it
+			break
+		}
 		fmt.Printf("uncovered %s %s %s %s: no flow calls this operation\n", u.Service, u.Method, u.Path, u.Operation)
 	}
 	if r.Exit == 0 {
