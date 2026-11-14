@@ -192,7 +192,7 @@ type checkReport struct {
 	Error   string      `json:"error,omitempty"` // set when exit is 2
 	Errors  []string    `json:"errors"`          // head files that failed to load
 	Edges   []checkEdge `json:"edges"`           // one per flow step, worst first
-	// Operations no flow calls; filled only with -fail-uncovered, which makes any entry exit 1.
+	// Operations no flow calls. Always filled; an entry makes exit 1 only with -fail-uncovered.
 	Uncovered []checkUncovered `json:"uncovered"`
 }
 
@@ -242,12 +242,11 @@ func runCheck(l Layout, base, head Ref, failUncovered bool) checkReport {
 		r.Edges = append(r.Edges, ce)
 	}
 	r.Verdict = worst(c.Edges).String()
-	if failUncovered {
-		for _, u := range uncovered(Coverage(c.Head)) {
-			r.Uncovered = append(r.Uncovered, checkUncovered{u.Service, u.Op.Method, u.Op.Path, u.Op.ID})
-		}
+	// Always listed, so an empty list means "all covered" and never "not computed".
+	for _, u := range uncovered(Coverage(c.Head)) {
+		r.Uncovered = append(r.Uncovered, checkUncovered{u.Service, u.Op.Method, u.Op.Path, u.Op.ID})
 	}
-	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking || len(r.Uncovered) > 0 {
+	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking || (failUncovered && len(r.Uncovered) > 0) {
 		r.Exit = 1
 	}
 	return r
@@ -271,8 +270,10 @@ func check(l Layout, base, head Ref, asJSON, failUncovered bool) int {
 			fmt.Printf("%-8s %s:%d %s -> %s %s: %s\n", f.Verdict, e.Flow, e.Line, e.Consumer, e.Provider, e.Operation, f.Text)
 		}
 	}
-	for _, u := range r.Uncovered {
-		fmt.Printf("uncovered %s %s %s %s: no flow calls this operation\n", u.Service, u.Method, u.Path, u.Operation)
+	if failUncovered { // text mode reports coverage only when asked to gate on it
+		for _, u := range r.Uncovered {
+			fmt.Printf("uncovered %s %s %s %s: no flow calls this operation\n", u.Service, u.Method, u.Path, u.Operation)
+		}
 	}
 	if r.Exit == 0 {
 		fmt.Printf("ok: %d flow edges compatible between %s and %s\n", len(r.Edges), r.Base, r.Head)
@@ -332,17 +333,22 @@ func render(w http.ResponseWriter, r *http.Request, page, fragment string, data 
 }
 
 // nav fills in what the header needs: the active section, and links that keep
-// the revision and view the page is showing. base is nil on pages that show
-// one state (index, spec); the Changes link then compares against the default base.
+// the revision and view the page is showing.
+//
+// NavIndex is the query for pages that show one state (index, spec). NavDiff
+// is the query for pages that compare (flow, diff). base is nil on a page that
+// shows one state; the comparison it links to is then HEAD against that state
+// in the same view, so the view's own filtering is not reported as a change.
 func nav(data map[string]any, section string, head Ref, base *Ref) map[string]any {
+	if base == nil {
+		base = &Ref{Rev: "HEAD", View: head.View}
+	}
 	data["Section"] = section
 	data["NavIndex"] = template.URL(url.Values{"rev": {head.Rev}, "view": {head.ViewString()}}.Encode())
-	q := url.Values{"head": {head.Rev}, "head_view": {head.ViewString()}}
-	if base != nil {
-		q.Set("base", base.Rev)
-		q.Set("base_view", base.ViewString())
-	}
-	data["NavDiff"] = template.URL(q.Encode())
+	data["NavDiff"] = template.URL(url.Values{
+		"base": {base.Rev}, "base_view": {base.ViewString()},
+		"head": {head.Rev}, "head_view": {head.ViewString()},
+	}.Encode())
 	return data
 }
 
@@ -483,7 +489,7 @@ func routes(l Layout) http.Handler {
 		} else {
 			data["C"], data["Worst"], data["Snap"] = c, worst(c.Edges), c.Head
 		}
-		render(w, r, "diff.html", "results", nav(data, "changes", head, &base))
+		render(w, r, "diff.html", "", nav(data, "changes", head, &base))
 	})
 	return mux
 }

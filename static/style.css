@@ -11,7 +11,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; }
-header { display: flex; gap: 1.5rem; align-items: center; padding: 0.6rem 1.5rem; border-bottom: 1px solid var(--line); }
+header { display: flex; flex-wrap: wrap; gap: 0.2rem 1.5rem; align-items: center; padding: 0.6rem 1.5rem; border-bottom: 1px solid var(--line); }
 .brand { font-weight: 700; letter-spacing: 0.04em; color: var(--fg); }
 nav { display: flex; gap: 1.1rem; align-items: center; white-space: nowrap; }
 nav a { color: var(--muted); }
@@ -66,7 +66,7 @@ figure.diagram { margin-left: 0; margin-right: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md code { font-size: 0.9em; background: var(--line); padding: 0 0.25em; border-radius: 3px; }
 @media (max-width: 480px) {
-  header { gap: 0.9rem; padding: 0.6rem 1rem; }
+  header { gap: 0.2rem 0.9rem; padding: 0.6rem 1rem; }
   nav { gap: 0.8rem; }
   main { padding: 1rem; }
 }

@@ -956,31 +956,29 @@ func TestCheckJSON(t *testing.T) {
 	// Nothing to check is exit 2 with an error, and empty arrays rather than null.
 	r = runCheck(Layout{Repo: dir, Specs: "specs", Flows: "nowhere", Config: "selvage.yaml"}, ParseRef("HEAD", ""), Ref{}, false)
 	data, _ = json.Marshal(r)
-	if r.Exit != 2 || r.Error == "" || !strings.Contains(string(data), `"edges":[]`) || !strings.Contains(string(data), `"errors":[]`) {
+	if r.Exit != 2 || r.Error == "" || !strings.Contains(string(data), `"edges":[]`) || !strings.Contains(string(data), `"errors":[]`) || !strings.Contains(string(data), `"uncovered":[]`) {
 		t.Errorf("exit-2 report: %s", data)
 	}
 }
 
-// -fail-uncovered: uncovered operations are in the report and make it exit 1.
+// uncovered is always listed; -fail-uncovered only decides whether it fails the check.
 func TestCheckJSONUncovered(t *testing.T) {
 	dir := overlay(t, "example/v1", "example/v1")
 	os.WriteFile(filepath.Join(dir, "flows", "refund.flow"), []byte("support -> payments: chargeCard\n"), 0o644)
-	git := exec.Command("git", "-C", dir, "init", "-q")
-	if out, err := git.CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v\n%s", err, out)
-	}
 	// Base is the working tree itself: nothing changed, so only coverage can fail the check.
-	if r := runCheck(layoutOf(dir), Ref{}, Ref{}, false); r.Exit != 0 || len(r.Uncovered) != 0 {
-		t.Fatalf("without the flag: exit %d, uncovered %v", r.Exit, r.Uncovered)
+	off := runCheck(layoutOf(dir), Ref{}, Ref{}, false)
+	on := runCheck(layoutOf(dir), Ref{}, Ref{}, true)
+	if off.Exit != 0 || on.Exit != 1 || on.Verdict != "safe" {
+		t.Fatalf("exit without the flag %d (want 0), with it %d (want 1), verdict %q", off.Exit, on.Exit, on.Verdict)
 	}
-	r := runCheck(layoutOf(dir), Ref{}, Ref{}, true)
-	if r.Exit != 1 || r.Verdict != "safe" || len(r.Uncovered) == 0 {
-		t.Fatalf("with the flag: %+v", r)
+	// refund.flow no longer calls getCharge, so it is the one uncovered operation, flag or not.
+	data, _ := json.Marshal(off.Uncovered)
+	want := `[{"service":"payments","method":"GET","path":"/charges/{chargeId}","operation":"getCharge"}]`
+	if string(data) != want {
+		t.Errorf("uncovered without the flag:\n got %s\nwant %s", data, want)
 	}
-	for _, u := range r.Uncovered {
-		if u.Operation == "chargeCard" || u.Service == "" || u.Method == "" || u.Path == "" {
-			t.Errorf("bad uncovered entry %+v", u)
-		}
+	if !reflect.DeepEqual(off.Uncovered, on.Uncovered) {
+		t.Errorf("the flag changed the list: %v vs %v", off.Uncovered, on.Uncovered)
 	}
 }
 
@@ -998,27 +996,47 @@ paths:
 	for i := 0; i < 30; i++ {
 		os.WriteFile(filepath.Join(dir, "flows", fmt.Sprintf("f%02d.flow", i)), []byte("web -> svc: getA\n"), 0o644)
 	}
-	nav := regexp.MustCompile(`(?s)<nav.*?</nav>`)
-	for target, current := range map[string]string{
-		"/?view=master":                         "Overview",
-		"/spec/svc?view=master":                 "Services",
-		"/flow/f07?head_view=master":            "Flows",
-		"/diff?head_view=master&base_view=main": "Changes",
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-qm", "c"}} { // the cases below use rev=HEAD
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@localhost",
+			"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	header := regexp.MustCompile(`(?s)<header>.*?</header>`)
+	const index = `href="/?rev=HEAD&amp;view=master`
+	for target, c := range map[string]struct{ current, changes string }{
+		// A page showing one state links to a comparison of HEAD with it, in the same view.
+		"/?rev=HEAD&view=master":         {"Overview", `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
+		"/spec/svc?rev=HEAD&view=master": {"Services", `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
+		// A page that compares keeps its own base.
+		"/flow/f07?head=HEAD&head_view=master&base=HEAD&base_view=main": {"Flows", `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
+		"/diff?head=HEAD&head_view=master&base=HEAD&base_view=main":     {"Changes", `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
 	} {
 		rec := httptest.NewRecorder()
 		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
-		got := nav.FindString(rec.Body.String())
-		if n := strings.Count(got, "<a "); n != 4 {
-			t.Errorf("%s: header has %d links, want 4", target, n)
+		got := header.FindString(rec.Body.String())
+		if n := strings.Count(got, "<a "); n != 5 { // the brand and four sections
+			t.Errorf("%s: header has %d links, want 5", target, n)
 		}
-		if !regexp.MustCompile(`aria-current="[a-z]+">`+current+`<`).MatchString(got) || strings.Count(got, "aria-current") != 1 {
-			t.Errorf("%s: want only %s marked current in %s", target, current, got)
+		if !regexp.MustCompile(`aria-current="[a-z]+">`+c.current+`<`).MatchString(got) || strings.Count(got, "aria-current") != 1 {
+			t.Errorf("%s: want only %s marked current in %s", target, c.current, got)
 		}
-		for _, want := range []string{`href="/?rev=&amp;view=master"`, `href="/?rev=&amp;view=master#flows"`, `head_view=master`} {
+		// brand, Overview, Services and Flows all open the index in this revision and view
+		if n := strings.Count(got, index); n != 4 {
+			t.Errorf("%s: %d of 4 index links keep the revision and view:\n%s", target, n, got)
+		}
+		for _, want := range []string{index + `#services"`, index + `#flows"`, c.changes} {
 			if !strings.Contains(got, want) {
-				t.Errorf("%s: header lost the view, want %s", target, want)
+				t.Errorf("%s: want %s in\n%s", target, want, got)
 			}
 		}
+	}
+	// Flow links on the index use the query the flow page reads.
+	rec := httptest.NewRecorder()
+	routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", "/?rev=HEAD&view=master", nil))
+	if !strings.Contains(rec.Body.String(), `href="/flow/f07?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`) {
+		t.Error("index flow links do not carry head and head_view")
 	}
 }
 
