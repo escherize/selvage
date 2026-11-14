@@ -78,7 +78,7 @@ What it does not check:
 - One schema per body: a body is checked through its JSON media type (`application/json`, `application/problem+json`, ...). If it has none, the first other media type by name that has a schema is used, so a YAML body with a JSON Schema works. Fields that exist only under another media type of the same body are reported missing, and a body with no schema at all reports every field missing. The response a step reads is the first 2xx with a JSON body, else the first 2xx with any schema.
 - Which media type a change is in: oasdiff reports changes for every media type, and the `reads`, `sends` and `omits` rules match on the property name alone.
 - Request values: a sent field is checked for existence, not its type, enum or format. A changed type or a removed enum value on a sent property gets oasdiff's level.
-- Undocumented calls: a call that no flow describes is not checked against any consumer. Flows are written by hand, so the check is only as complete as the flows.
+- Undocumented calls: a call that no flow describes is not checked against any consumer. Flows are written by hand, so the check is only as complete as the flows. `selvage coverage` lists the operations no flow calls (below).
 
 ## Verdict rules
 
@@ -145,6 +145,22 @@ schema:
 ```
 
 A consumer that reads `name` is then breaking in the `master,hardening` view. In the UI, the `base`/`head` view boxes take the same lists.
+
+## Coverage
+
+```
+selvage coverage -repo .                    # every operation and the flows that call it
+selvage check -repo . -base origin/main -fail-uncovered
+```
+
+An operation with no flow has no consumer that `check` judges it against: a change to it can never be breaking. `coverage` prints one line per operation (`covered` or `uncovered`) and a total. The index page lists the uncovered operations.
+
+Exit status of `coverage`: 0 normally; 1 when a head file failed to load, or with `-fail-uncovered` when any operation has no flow; 2 when it finds no operations. `check` takes `-fail-uncovered` too.
+
+- Coverage is counted in the head view, so an operation the view prunes is not reported.
+- A step covers the operation `check` judges for it. When two operations share an `operationId`, only the first is ever checked, so the other is reported uncovered.
+- `coverage` does not report steps that name an unknown service or operation; `check` does, as breaking.
+- A flow can only name ids made of letters, digits, `_`, `.` and `-`. An operation whose id has other characters (`orders:list`, or a path like `/a:cancel` with no `operationId`) cannot be covered yet.
 
 ## Static site
 
