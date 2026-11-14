@@ -831,4 +831,23 @@ paths:
 	if u := uncovered(Coverage(snap)); len(u) != 1 || u[0].Op.ID != "getB" {
 		t.Errorf("uncovered: %+v", u)
 	}
+
+	// Two operations with one id: check only ever judges the first, so only it is covered.
+	dup, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /a: {get: {operationId: dup, responses: {"200": {description: ok}}}}
+  /b: {get: {operationId: dup, responses: {"200": {description: ok}}}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap = Snapshot{Specs: map[string]*load.SpecInfo{"svc": {Spec: dup}},
+		Flows: []Flow{{Name: "f", Steps: []Step{{Provider: "svc", OperationID: "dup"}}}}}
+	judged, _ := findOp(dup, "dup")
+	u := uncovered(Coverage(snap))
+	if len(u) != 1 || u[0].Op.Path == judged.Path {
+		t.Errorf("want the operation check does not judge to be uncovered, got %+v (check judges %s)", u, judged.Path)
+	}
 }

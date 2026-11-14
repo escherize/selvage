@@ -12,11 +12,24 @@ type OpCoverage struct {
 // Coverage lists every operation of every spec in snap with the flows that
 // call it. Flows are written by hand, so an operation with no flow is one that
 // no check judges against a real consumer. Pure: no IO.
+//
+// A step covers the operation that check would judge for it: the one findOp
+// resolves. When two operations share an id, only the first is ever checked,
+// so the second stays uncovered.
 func Coverage(snap Snapshot) []OpCoverage {
-	callers := map[[2]string]map[string]bool{} // {service, operationId} -> flow names
+	type target struct{ service, method, path string }
+	callers := map[target]map[string]bool{} // operation -> flow names
 	for _, f := range snap.Flows {
 		for _, s := range f.Steps {
-			k := [2]string{s.Provider, s.OperationID}
+			spec, ok := snap.Specs[s.Provider]
+			if !ok {
+				continue // check reports the step as breaking: no spec for the service
+			}
+			op, ok := findOp(spec.Spec, s.OperationID)
+			if !ok {
+				continue // check reports it: operation not found
+			}
+			k := target{s.Provider, op.Method, op.Path}
 			if callers[k] == nil {
 				callers[k] = map[string]bool{}
 			}
@@ -27,7 +40,7 @@ func Coverage(snap Snapshot) []OpCoverage {
 	for _, svc := range snap.Services() {
 		for _, op := range operations(snap.Specs[svc].Spec) {
 			c := OpCoverage{Service: svc, Op: op}
-			for name := range callers[[2]string{svc, op.ID}] {
+			for name := range callers[target{svc, op.Method, op.Path}] {
 				c.Flows = append(c.Flows, name)
 			}
 			sort.Strings(c.Flows)
