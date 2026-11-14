@@ -21,7 +21,7 @@ type Ref struct {
 func ParseRef(rev, view string) Ref {
 	r := Ref{Rev: rev}
 	for _, v := range strings.Split(view, ",") {
-		if v = strings.TrimSpace(v); v != "" {
+		if v = strings.TrimSpace(v); v != "" && !contains(r.View, v) { // a repeated status adds nothing
 			r.View = append(r.View, v)
 		}
 	}
@@ -37,6 +37,31 @@ func (r Ref) Label() string {
 		l += " [" + strings.Join(r.View, ",") + "]"
 	}
 	return l
+}
+
+// Plain says which state of the contracts this is, for a reader who does not
+// know git or x-status: "status master with hardening applied, in the working
+// tree", "every status, in the latest commit (HEAD)". Label is the precise form.
+//
+// The word "status" is there so a value like "master" is not read as a branch.
+// Later statuses are "applied", not added: a status can remove what an earlier
+// one had (x-removed-in), and untagged elements are in every view.
+func (r Ref) Plain() string {
+	where := "in the working tree"
+	switch r.Rev {
+	case "":
+	case "HEAD", "@":
+		where = "in the latest commit (HEAD)"
+	default:
+		where = "at revision " + r.Rev
+	}
+	switch len(r.View) {
+	case 0:
+		return "every status, " + where
+	case 1:
+		return "status " + r.View[0] + ", " + where
+	}
+	return "status " + r.View[0] + " with " + strings.Join(r.View[1:], " and ") + " applied, " + where
 }
 
 // ViewString is the view as typed, for form inputs.

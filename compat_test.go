@@ -1416,3 +1416,67 @@ func TestChangesPageLeadsWithProblems(t *testing.T) {
 		t.Error("with no flows the summary must say nothing is checked")
 	}
 }
+
+// Every page says in plain words which state or comparison it shows, then the exact refs.
+func TestPlainComparison(t *testing.T) {
+	for _, c := range []struct{ rev, view, want string }{
+		{"", "", "every status, in the working tree"},
+		{"", "master", "status master, in the working tree"},
+		{"HEAD", "master,hardening", "status master with hardening applied, in the latest commit (HEAD)"},
+		{"@", "", "every status, in the latest commit (HEAD)"},
+		{"v1.2", "", "every status, at revision v1.2"},
+		{"origin/main", "a, b ,c", "status a with b and c applied, at revision origin/main"},
+		{"", "hardening,hardening", "status hardening, in the working tree"}, // a repeat adds nothing
+	} {
+		if got := ParseRef(c.rev, c.view).Plain(); got != c.want {
+			t.Errorf("ParseRef(%q, %q).Plain() = %q, want %q", c.rev, c.view, got, c.want)
+		}
+	}
+
+	dir := overlay(t, "example/v1", "example/v1")
+	page := func(target string) string {
+		rec := httptest.NewRecorder()
+		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != 200 {
+			t.Fatalf("%s: HTTP %d", target, rec.Code)
+		}
+		return regexp.MustCompile(`\s+`).ReplaceAllString(rec.Body.String(), " ")
+	}
+	check := func(target string, want ...string) {
+		t.Helper()
+		body := page(target)
+		for _, w := range want {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s: want %q", target, w)
+			}
+		}
+	}
+
+	// Not a git repo: nothing is compared, and each page says which single state it shows.
+	check("/?view=master", "Every call exists. Showing status master, in the working tree.", `<span class="reflabel">(working tree [master])</span>`)
+	check("/flow/checkout?head_view=master", "Showing status master, in the working tree.", `<span class="reflabel">(working tree [master])</span>`)
+
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-qm", "c"}} {
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@localhost",
+			"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	// Base first, head second, in the sentence and in the exact refs.
+	check("/", "going from every status, in the latest commit (HEAD) to every status, in the working tree.",
+		`<span class="reflabel">(HEAD &rarr; working tree)</span>`)
+	check("/?view=master", "going from status master, in the latest commit (HEAD) to status master, in the working tree.",
+		`<span class="reflabel">(HEAD [master] &rarr; working tree [master])</span>`)
+	check("/diff?base_view=master&head_view=master,hardening",
+		"going from status master, in the latest commit (HEAD) to status master with hardening applied, in the working tree.",
+		`<span class="reflabel">(HEAD [master] &rarr; working tree [master,hardening])</span>`)
+	check("/flow/checkout?head_view=master", "Comparing every status, in the latest commit (HEAD) with status master, in the working tree.",
+		`<span class="reflabel">(HEAD &rarr; working tree [master])</span>`)
+	check("/spec/orders", "Showing every status, in the working tree.", `<span class="reflabel">(working tree)</span>`)
+	check("/spec/orders?rev=HEAD&view=master", "Showing status master, in the latest commit (HEAD).", `<span class="reflabel">(HEAD [master])</span>`)
+
+	// No flows: the index still says which state its counts are for.
+	os.RemoveAll(filepath.Join(dir, "flows"))
+	check("/?view=master", "nothing is checked. Showing status master, in the working tree.", `<span class="reflabel">(working tree [master])</span>`)
+}

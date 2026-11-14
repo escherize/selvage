@@ -4,10 +4,14 @@
 {{template "errs" .Errs}}
 <p class="summary">{{len .Flows}} {{if eq (len .Flows) 1}}flow{{else}}flows{{end}} across {{len .Services}} {{if eq (len .Services) 1}}service{{else}}services{{end}}.
   {{$.Covered}} of {{$.Operations}} operations have a flow.
-  {{if not .Flows}}No flow describes a caller, so nothing is checked.
-  {{else if $.CompareErr}}{{if $.Failing}}<span class="badge v-breaking">{{$.Failing}} {{if eq $.Failing 1}}call names{{else}}calls name{{end}} something missing</span> in {{.Label}}.{{else}}Every call exists in {{.Label}}.{{end}}
+  {{if not .Flows}}No flow describes a caller, so nothing is checked. Showing {{.Ref.Plain}}.
+  <span class="reflabel">({{.Label}})</span>
+  {{else if $.CompareErr}}{{if $.Failing}}<span class="badge v-breaking">{{$.Failing}} {{if eq $.Failing 1}}call names{{else}}calls name{{end}} something missing</span>.{{else}}Every call exists.{{end}}
+  Showing {{.Ref.Plain}}.
+  <span class="reflabel">({{.Label}})</span>
   {{else}}{{if $.Failing}}<span class="badge v-breaking">{{$.Failing}} {{if eq $.Failing 1}}call breaks{{else}}calls break{{end}}</span>{{else}}No call breaks{{end}}{{if $.Risky}} and <span class="badge v-risky">{{$.Risky}} {{if eq $.Risky 1}}is{{else}}are{{end}} risky</span>{{end}}
-  going from {{$.Base.Label}} to {{.Label}}.{{end}}</p>
+  going from {{$.Base.Plain}} to {{.Ref.Plain}}.
+  <span class="reflabel">({{$.Base.Label}} &rarr; {{.Label}})</span>{{end}}</p>
 {{if .Flows}}{{with $.CompareErr}}<p class="muted">Not compared with a base, so changes are not judged here: {{.}}</p>{{end}}{{end}}
 {{with $.MapOmitted}}<p class="muted">The map is not drawn for {{.}} (the limits are 40 and 80). The tables below list every flow and service.</p>{{end}}
 {{with $.DiagramErr}}<p class="err">diagram: {{.}}</p>{{end}}
