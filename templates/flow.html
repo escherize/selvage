@@ -1,6 +1,7 @@
 {{define "content"}}
 <h1>{{.Flow.Title}}</h1>
 <form class="revs" action="/flow/{{.Flow.Name}}">{{template "refs" .}}</form>
+<p class="summary">{{if .CompareErr}}Showing {{.Head.Plain}}. <span class="reflabel">{{.Head.Label}}</span>{{else}}Comparing {{.Base.Plain}} with {{.Head.Plain}}. <span class="reflabel">{{.Base.Label}} &rarr; {{.Head.Label}}</span>{{end}}</p>
 {{with .CompareErr}}<p class="err">compatibility not checked: {{.}}</p>{{end}}
 {{with .DiagramErr}}<p class="err">diagram: {{.}}</p>{{end}}
 <div class="diagram">{{.SVG}}</div>

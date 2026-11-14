@@ -2,7 +2,7 @@
 <div class="spec">
   <aside class="opnav">
     <h2>{{.Service}} <span class="muted">v{{.Spec.Info.Version}}</span></h2>
-    <p class="muted">{{.Ref.Label}}</p>
+    <p class="muted">Showing {{.Ref.Plain}}. <span class="reflabel">{{.Ref.Label}}</span></p>
     {{with .Prefix}}<p class="muted">paths under <code>{{.}}</code></p>{{end}}
     {{$svc := .Service}}{{$q := .Query}}{{$tag := ""}}
     {{range .Ops}}

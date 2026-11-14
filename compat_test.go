@@ -1416,3 +1416,46 @@ func TestChangesPageLeadsWithProblems(t *testing.T) {
 		t.Error("with no flows the summary must say nothing is checked")
 	}
 }
+
+// Every page says in plain words which state or comparison it shows.
+func TestPlainComparison(t *testing.T) {
+	for _, c := range []struct{ rev, view, want string }{
+		{"", "", "everything in the working tree"},
+		{"", "master", "master in the working tree"},
+		{"HEAD", "master,hardening", "master plus hardening in the last commit"},
+		{"v1.2", "", "everything in revision v1.2"},
+		{"origin/main", "a, b ,c", "a plus b plus c in revision origin/main"},
+	} {
+		if got := ParseRef(c.rev, c.view).Plain(); got != c.want {
+			t.Errorf("ParseRef(%q, %q).Plain() = %q, want %q", c.rev, c.view, got, c.want)
+		}
+	}
+
+	dir := overlay(t, "example/v1", "example/v1")
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-qm", "c"}} {
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@localhost",
+			"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	for target, want := range map[string]string{
+		"/":             "going from everything in the last commit to everything in the working tree.",
+		"/?view=master": "going from master in the last commit to master in the working tree.",
+		"/diff?base_view=master&head_view=master,hardening": "going from master in the last commit to master plus hardening in the working tree.",
+		"/diff?base=HEAD&head=HEAD":                         "going from everything in the last commit to everything in the last commit.",
+		"/flow/checkout?head_view=master":                   "Comparing everything in the last commit with master in the working tree.",
+		"/spec/orders":                                      "Showing everything in the working tree.",
+		"/spec/orders?rev=HEAD&view=master":                 "Showing master in the last commit.",
+	} {
+		rec := httptest.NewRecorder()
+		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
+		body := regexp.MustCompile(`\s+`).ReplaceAllString(rec.Body.String(), " ")
+		if rec.Code != 200 || !strings.Contains(body, want) {
+			t.Errorf("%s (HTTP %d): want %q", target, rec.Code, want)
+		}
+		if !strings.Contains(body, `class="reflabel"`) {
+			t.Errorf("%s: the exact refs are missing", target)
+		}
+	}
+}

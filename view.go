@@ -39,6 +39,24 @@ func (r Ref) Label() string {
 	return l
 }
 
+// Plain says which state of the contracts this is in words a reader who does
+// not know git or x-status can follow: "master plus hardening in the working
+// tree", "everything in the last commit". Label is the precise form.
+func (r Ref) Plain() string {
+	where := "the working tree"
+	switch r.Rev {
+	case "":
+	case "HEAD":
+		where = "the last commit"
+	default:
+		where = "revision " + r.Rev
+	}
+	if len(r.View) == 0 {
+		return "everything in " + where
+	}
+	return strings.Join(r.View, " plus ") + " in " + where
+}
+
 // ViewString is the view as typed, for form inputs.
 func (r Ref) ViewString() string { return strings.Join(r.View, ",") }
 
