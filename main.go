@@ -368,7 +368,32 @@ func routes(l Layout) http.Handler {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		render(w, r, "index.html", "", nav(map[string]any{"Snap": snap, "Uncovered": uncovered(Coverage(snap)), "Query": template.URL(r.URL.RawQuery)}, "overview", ref, nil))
+		// The map shows whether each call holds in this state of the contract:
+		// its operation exists and has the fields the caller uses. What a change
+		// breaks is the Changes page's job, which needs a base to compare with.
+		results := CheckEdges(snap, nil)
+		cov := Coverage(snap)
+		data := map[string]any{"Snap": snap, "Uncovered": uncovered(cov), "Query": template.URL(r.URL.RawQuery),
+			"Operations": len(cov), "Covered": len(cov) - len(uncovered(cov))}
+		failing := 0
+		for _, e := range results {
+			if e.Verdict == Breaking {
+				failing++
+			}
+		}
+		data["Failing"] = failing
+		if edges := SystemMap(results); len(edges) > 0 {
+			hasSpec := map[string]bool{}
+			for _, svc := range snap.Services() {
+				hasSpec[svc] = true
+			}
+			svg, err := renderSVG(mapD2(edges, hasSpec))
+			if err != nil {
+				data["DiagramErr"] = err.Error()
+			}
+			data["Map"] = svg
+		}
+		render(w, r, "index.html", "", nav(data, "overview", ref, nil))
 	})
 
 	spec := func(w http.ResponseWriter, r *http.Request) {

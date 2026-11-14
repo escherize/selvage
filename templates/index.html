@@ -2,6 +2,15 @@
 <h1>Contracts</h1>
 {{with .Snap}}
 {{template "errs" .Errs}}
+<p class="summary">{{len .Flows}} {{if eq (len .Flows) 1}}flow{{else}}flows{{end}} across {{len .Services}} {{if eq (len .Services) 1}}service{{else}}services{{end}}.
+  {{$.Covered}} of {{$.Operations}} operations have a flow.
+  {{if $.Failing}}<span class="badge v-breaking">{{$.Failing}} {{if eq $.Failing 1}}call does{{else}}calls do{{end}} not hold</span> in {{.Label}}.{{else}}Every call holds in {{.Label}}.{{end}}</p>
+{{with $.DiagramErr}}<p class="err">diagram: {{.}}</p>{{end}}
+{{with $.Map}}
+<figure class="diagram map">{{.}}
+  <figcaption>Who calls what. An arrow is every call one party makes to a service, across all flows. A dashed box is a caller this contract has no spec for.</figcaption>
+</figure>
+{{end}}
 <section class="cards">
   <div class="card">
     <h2 id="services">Services</h2>

@@ -1021,3 +1021,38 @@ paths:
 		}
 	}
 }
+
+// The system map has one edge per consumer -> provider pair, counting distinct operations and keeping the worst verdict.
+func TestSystemMap(t *testing.T) {
+	step := func(consumer, provider, op string, v Verdict) EdgeResult {
+		return EdgeResult{Step: Step{Consumer: consumer, Provider: provider, OperationID: op}, Verdict: v}
+	}
+	got := SystemMap([]EdgeResult{
+		step("web", "orders", "getOrder", Safe),
+		step("web", "orders", "getOrder", Risky), // same operation from another flow
+		step("web", "orders", "createOrder", Safe),
+		step("web", "payments", "charge", Breaking),
+		step("orders", "payments", "charge", Safe),
+	})
+	want := []MapEdge{
+		{"orders", "payments", 1, Safe},
+		{"web", "orders", 2, Risky},
+		{"web", "payments", 1, Breaking},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v\nwant %+v", got, want)
+	}
+	src := mapD2(got, map[string]bool{"orders": true, "payments": true})
+	for _, s := range []string{`"web" -> "payments": "1 operation, breaking"`, `"web" -> "orders": "2 operations, risky"`, `"orders" -> "payments": "1 operation"`} {
+		if !strings.Contains(src, s) {
+			t.Errorf("D2 source lacks %s:\n%s", s, src)
+		}
+	}
+	if _, err := renderSVG(src); err != nil {
+		t.Errorf("map does not render: %v", err)
+	}
+	// A name that needs quoting must not break the diagram.
+	if _, err := renderSVG(mapD2([]MapEdge{{"a b", "c.d", 1, Safe}}, nil)); err != nil {
+		t.Errorf("quoted names: %v", err)
+	}
+}
