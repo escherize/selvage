@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"html/template"
@@ -25,6 +26,7 @@ const usage = `selvage - API contract viewer
       browse specs, flows and diffs
   selvage check [layout flags] -base REV [-base-view V] [-head REV] [-head-view V]
       exit 1 if any flow edge breaks; head defaults to the working tree
+      -json prints the result as one JSON document
   selvage export [layout flags] -out DIR [-base REV] [-base-view V] [-head REV] [-head-view V]
       write every page for one base/head comparison as a static site; base defaults to HEAD
 
@@ -48,6 +50,7 @@ func main() {
 	head := fl.String("head", "", "head git revision (empty = working tree)")
 	headView := fl.String("head-view", "", "x-status values to keep in head (empty = all)")
 	out := fl.String("out", "", "export: output directory")
+	asJSON := fl.Bool("json", false, "check: print one JSON document instead of text")
 	fl.Parse(os.Args[2:])
 	if l.Repo == "" || l.Specs == "" || l.Flows == "" || l.Config == "" {
 		fmt.Fprintln(os.Stderr, "-repo, -specs, -flows and -config must not be empty")
@@ -63,7 +66,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "check: -base is required")
 			os.Exit(2)
 		}
-		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView)))
+		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView), *asJSON))
 	case "export":
 		if *out == "" {
 			fmt.Fprintln(os.Stderr, "export: -out is required")
@@ -118,30 +121,88 @@ func compare(l Layout, baseRef, headRef Ref) (comparison, error) {
 	return c, nil
 }
 
-func check(l Layout, base, head Ref) int {
+// checkReport is the result of `check`: the -json document, and what the text
+// output is printed from. Field names are a stable contract (see the README).
+type checkReport struct {
+	Base    string      `json:"base"`
+	Head    string      `json:"head"`
+	Verdict string      `json:"verdict"`         // worst edge verdict: safe, risky or breaking
+	Exit    int         `json:"exit"`            // 0 ok, 1 a breaking edge or a head error, 2 could not check
+	Error   string      `json:"error,omitempty"` // set when exit is 2
+	Errors  []string    `json:"errors"`          // head files that failed to load
+	Edges   []checkEdge `json:"edges"`           // one per flow step, worst first
+}
+
+type checkEdge struct {
+	Flow      string         `json:"flow"`
+	Line      int            `json:"line"`
+	Consumer  string         `json:"consumer"`
+	Provider  string         `json:"provider"`
+	Operation string         `json:"operation"`
+	Verdict   string         `json:"verdict"`
+	Findings  []checkFinding `json:"findings"`
+}
+
+type checkFinding struct {
+	Verdict string `json:"verdict"`
+	Text    string `json:"text"`
+}
+
+// runCheck compares base and head and decides the exit status. No printing.
+func runCheck(l Layout, base, head Ref) checkReport {
+	r := checkReport{Base: base.Label(), Head: head.Label(), Errors: []string{}, Edges: []checkEdge{}}
 	c, err := compare(l, base, head)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
+		r.Exit, r.Error = 2, err.Error()
+		return r
 	}
-	for _, e := range c.Head.Errs {
-		fmt.Printf("ERROR    %s\n", e)
-	}
+	r.Errors = append(r.Errors, c.Head.Errs...)
 	// A mistyped -specs or -flows finds nothing; that must not pass the gate.
 	if len(c.Head.Specs) == 0 || len(c.Head.Flows) == 0 {
-		fmt.Fprintf(os.Stderr, "check: found %d specs in %s and %d flows in %s at %s\n", len(c.Head.Specs), l.Specs, len(c.Head.Flows), l.Flows, c.Head.Label())
-		return 2
+		r.Exit = 2
+		r.Error = fmt.Sprintf("check: found %d specs in %s and %d flows in %s at %s", len(c.Head.Specs), l.Specs, len(c.Head.Flows), l.Flows, c.Head.Label())
+		return r
 	}
 	for _, e := range c.Edges {
+		ce := checkEdge{Flow: e.Flow, Line: e.Step.Line, Consumer: e.Step.Consumer, Provider: e.Step.Provider,
+			Operation: e.Step.OperationID, Verdict: e.Verdict.String(), Findings: []checkFinding{}}
 		for _, f := range e.Findings {
-			fmt.Printf("%-8s %s:%d %s -> %s %s: %s\n", f.Verdict, e.Flow, e.Step.Line, e.Step.Consumer, e.Step.Provider, e.Step.OperationID, f.Text)
+			ce.Findings = append(ce.Findings, checkFinding{f.Verdict.String(), f.Text})
+		}
+		r.Edges = append(r.Edges, ce)
+	}
+	r.Verdict = worst(c.Edges).String()
+	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking {
+		r.Exit = 1
+	}
+	return r
+}
+
+// check prints the report as text, or as one JSON document, and returns the exit status.
+func check(l Layout, base, head Ref, asJSON bool) int {
+	r := runCheck(l, base, head)
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(r)
+		return r.Exit
+	}
+	for _, e := range r.Errors {
+		fmt.Printf("ERROR    %s\n", e)
+	}
+	if r.Exit == 2 {
+		fmt.Fprintln(os.Stderr, r.Error)
+		return 2
+	}
+	for _, e := range r.Edges {
+		for _, f := range e.Findings {
+			fmt.Printf("%-8s %s:%d %s -> %s %s: %s\n", f.Verdict, e.Flow, e.Line, e.Consumer, e.Provider, e.Operation, f.Text)
 		}
 	}
-	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking {
-		return 1
+	if r.Exit == 0 {
+		fmt.Printf("ok: %d flow edges compatible between %s and %s\n", len(r.Edges), r.Base, r.Head)
 	}
-	fmt.Printf("ok: %d flow edges compatible between %s and %s\n", len(c.Edges), c.Base.Label(), c.Head.Label())
-	return 0
+	return r.Exit
 }
 
 // ---- HTTP ----

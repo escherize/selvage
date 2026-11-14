@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -796,5 +798,65 @@ paths:
 		if status, s := successSchema(op.Op); status != c.status || !hasField(s, "id") {
 			t.Errorf("%s: picked %s, id=%v; want %s with id", name, status, hasField(s, "id"), c.status)
 		}
+	}
+}
+
+// The -json document: field names are a contract, and exit mirrors the process status.
+func TestCheckJSON(t *testing.T) {
+	// HEAD = example/v1, working tree = example/v2, as scripts/demo.sh builds it.
+	dir := overlay(t, "example/v1", "example/v1")
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@localhost"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("add", "-A")
+	git("commit", "-qm", "v1")
+	// Overwrite with v2 (os.CopyFS refuses to replace existing files).
+	err := filepath.WalkDir("example/v2", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel("example/v2", p)
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, rel), data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := runCheck(layoutOf(dir), ParseRef("HEAD", ""), Ref{})
+	if r.Exit != 1 || r.Verdict != "breaking" || r.Error != "" || len(r.Edges) == 0 {
+		t.Fatalf("report: %+v", r)
+	}
+	if e := r.Edges[0]; e.Verdict != "breaking" || len(e.Findings) == 0 || e.Flow == "" || e.Line == 0 {
+		t.Errorf("edges are worst first with their findings, got %+v", e)
+	}
+	data, _ := json.Marshal(r)
+	var doc map[string]any
+	json.Unmarshal(data, &doc)
+	for _, k := range []string{"base", "head", "verdict", "exit", "errors", "edges"} {
+		if _, ok := doc[k]; !ok {
+			t.Errorf("missing top-level field %q in %s", k, data)
+		}
+	}
+	edge := doc["edges"].([]any)[0].(map[string]any)
+	for _, k := range []string{"flow", "line", "consumer", "provider", "operation", "verdict", "findings"} {
+		if _, ok := edge[k]; !ok {
+			t.Errorf("missing edge field %q", k)
+		}
+	}
+
+	// Nothing to check is exit 2 with an error, and empty arrays rather than null.
+	r = runCheck(Layout{Repo: dir, Specs: "specs", Flows: "nowhere", Config: "selvage.yaml"}, ParseRef("HEAD", ""), Ref{})
+	data, _ = json.Marshal(r)
+	if r.Exit != 2 || r.Error == "" || !strings.Contains(string(data), `"edges":[]`) || !strings.Contains(string(data), `"errors":[]`) {
+		t.Errorf("exit-2 report: %s", data)
 	}
 }
