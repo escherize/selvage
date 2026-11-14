@@ -388,6 +388,7 @@ func routes(l Layout) http.Handler {
 			}
 		}
 		data["Failing"] = failing
+		data["FlowRows"], data["ServiceRows"] = FlowRows(snap.Flows, results), ServiceRows(cov, results)
 		if edges := SystemMap(results); len(edges) > 0 {
 			hasSpec := map[string]bool{}
 			for _, svc := range snap.Services() {

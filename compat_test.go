@@ -1074,3 +1074,53 @@ func TestSystemMap(t *testing.T) {
 		t.Errorf("quoted names: %v", err)
 	}
 }
+
+// The index tables: flows worst first with who calls what; services with coverage, callers and verdict.
+func TestIndexRows(t *testing.T) {
+	step := func(consumer, provider, op string) Step {
+		return Step{Consumer: consumer, Provider: provider, OperationID: op}
+	}
+	flows := []Flow{
+		{Name: "b", Title: "Beta", Steps: []Step{step("web", "orders", "getOrder"), step("web", "pay", "charge"), step("web", "orders", "createOrder")}},
+		{Name: "a", Title: "Alpha", Steps: []Step{step("orders", "pay", "charge"), step("web", "ghost", "x")}},
+		{Name: "c", Title: "Aardvark", Steps: []Step{step("web", "orders", "getOrder")}},
+	}
+	var results []EdgeResult
+	for _, f := range flows {
+		for _, s := range f.Steps {
+			v := Safe
+			if s.Provider == "ghost" {
+				v = Breaking // no spec for the service
+			}
+			results = append(results, EdgeResult{Flow: f.Name, Step: s, Verdict: v})
+		}
+	}
+	rows := FlowRows(flows, results)
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.Flow.Title+" ["+r.Verdict.String()+"] "+strings.Join(r.Calls, "; "))
+	}
+	want := []string{
+		"Alpha [breaking] orders -> pay; web -> ghost", // worst first
+		"Aardvark [safe] web -> orders",                // then by title
+		"Beta [safe] web -> orders, pay",               // a provider called twice is listed once
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("flows:\n got %q\nwant %q", got, want)
+	}
+
+	cov := []OpCoverage{
+		{Service: "orders", Flows: []string{"b", "c"}}, {Service: "orders", Flows: []string{"b"}}, {Service: "orders"},
+		{Service: "pay", Flows: []string{"a", "b"}},
+		{Service: "idle"},
+	}
+	svc := ServiceRows(cov, results)
+	wantSvc := []ServiceRow{
+		{Name: "idle", Operations: 1},
+		{Name: "orders", Operations: 3, Covered: 2, Callers: []string{"web"}},
+		{Name: "pay", Operations: 1, Covered: 1, Callers: []string{"orders", "web"}},
+	}
+	if !reflect.DeepEqual(svc, wantSvc) {
+		t.Errorf("services:\n got %+v\nwant %+v", svc, wantSvc)
+	}
+}

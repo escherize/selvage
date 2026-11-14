@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -76,4 +77,89 @@ func mapD2(edges []MapEdge, hasSpec map[string]bool) string {
 			strconv.Quote(e.Consumer), strconv.Quote(e.Provider), strconv.Quote(label), verdictColor[e.Verdict])
 	}
 	return b.String()
+}
+
+// FlowRow is one flow as the index lists it.
+type FlowRow struct {
+	Flow    Flow
+	Calls   []string // "consumer -> provider, provider", one entry per consumer, in step order
+	Verdict Verdict  // worst verdict of its steps
+}
+
+// FlowRows summarizes each flow, worst verdict first, then by title.
+// results holds one EdgeResult per step of every flow. Pure.
+func FlowRows(flows []Flow, results []EdgeResult) []FlowRow {
+	worst := map[string]Verdict{}
+	for _, r := range results {
+		worst[r.Flow] = max(worst[r.Flow], r.Verdict)
+	}
+	rows := make([]FlowRow, 0, len(flows))
+	for _, f := range flows {
+		var consumers []string
+		providers := map[string][]string{}
+		for _, s := range f.Steps {
+			if _, ok := providers[s.Consumer]; !ok {
+				consumers = append(consumers, s.Consumer)
+			}
+			if !slices.Contains(providers[s.Consumer], s.Provider) {
+				providers[s.Consumer] = append(providers[s.Consumer], s.Provider)
+			}
+		}
+		row := FlowRow{Flow: f, Verdict: worst[f.Name]}
+		for _, c := range consumers {
+			row.Calls = append(row.Calls, c+" -> "+strings.Join(providers[c], ", "))
+		}
+		rows = append(rows, row)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Verdict != rows[j].Verdict {
+			return rows[i].Verdict > rows[j].Verdict
+		}
+		return rows[i].Flow.Title < rows[j].Flow.Title
+	})
+	return rows
+}
+
+// ServiceRow is one service as the index lists it.
+type ServiceRow struct {
+	Name       string
+	Operations int
+	Covered    int      // operations at least one flow calls
+	Callers    []string // consumers that call it, sorted
+	Verdict    Verdict  // worst verdict of the steps that call it
+}
+
+// ServiceRows summarizes each service the contract has a spec for, by name. Pure.
+func ServiceRows(cov []OpCoverage, results []EdgeResult) []ServiceRow {
+	byName := map[string]*ServiceRow{}
+	var names []string
+	for _, c := range cov {
+		row := byName[c.Service]
+		if row == nil {
+			row = &ServiceRow{Name: c.Service}
+			byName[c.Service] = row
+			names = append(names, c.Service)
+		}
+		row.Operations++
+		if len(c.Flows) > 0 {
+			row.Covered++
+		}
+	}
+	for _, r := range results {
+		row := byName[r.Step.Provider]
+		if row == nil {
+			continue // a step on a service with no spec; the flow row carries its verdict
+		}
+		row.Verdict = max(row.Verdict, r.Verdict)
+		if !slices.Contains(row.Callers, r.Step.Consumer) {
+			row.Callers = append(row.Callers, r.Step.Consumer)
+		}
+	}
+	sort.Strings(names)
+	rows := make([]ServiceRow, 0, len(names))
+	for _, n := range names {
+		sort.Strings(byName[n].Callers)
+		rows = append(rows, *byName[n])
+	}
+	return rows
 }
