@@ -335,7 +335,7 @@ func render(w http.ResponseWriter, r *http.Request, page, fragment string, data 
 // nav fills in what the header needs: the active section, and links that keep
 // the revision and view the page is showing.
 //
-// NavIndex is the query for pages that show one state (index, spec). NavDiff
+// NavIndex is the query for the index and spec pages (rev/view name the head). NavDiff
 // is the query for pages that compare (flow, diff). base is nil on a page that
 // shows one state; the comparison it links to is then HEAD against that state
 // in the same view, so the view's own filtering is not reported as a change.
@@ -344,7 +344,10 @@ func nav(data map[string]any, section string, head Ref, base *Ref) map[string]an
 		base = &Ref{Rev: "HEAD", View: head.View}
 	}
 	data["Section"] = section
-	data["NavIndex"] = template.URL(url.Values{"rev": {head.Rev}, "view": {head.ViewString()}}.Encode())
+	data["NavIndex"] = template.URL(url.Values{
+		"base": {base.Rev}, "base_view": {base.ViewString()}, // the index compares; spec pages ignore these
+		"rev": {head.Rev}, "view": {head.ViewString()},
+	}.Encode())
 	data["NavDiff"] = template.URL(url.Values{
 		"base": {base.Rev}, "base_view": {base.ViewString()},
 		"head": {head.Rev}, "head_view": {head.ViewString()},
@@ -368,26 +371,45 @@ func routes(l Layout) http.Handler {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		ref := ParseRef(r.URL.Query().Get("rev"), r.URL.Query().Get("view"))
-		snap, err := LoadSnapshot(l, ref)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+		// The index compares like every other verdict in selvage: base against
+		// head. rev/view name the head; base defaults to HEAD in the head's view.
+		q := r.URL.Query()
+		head := ParseRef(q.Get("rev"), q.Get("view"))
+		baseRev, baseView := q.Get("base"), head.ViewString()
+		if baseRev == "" {
+			baseRev = "HEAD"
 		}
-		// The map shows whether each call holds in this state of the contract:
-		// its operation exists and has the fields the caller uses. What a change
-		// breaks is the Changes page's job, which needs a base to compare with.
-		results := CheckEdges(snap, nil)
+		if q.Has("base_view") {
+			baseView = q.Get("base_view")
+		}
+		base := ParseRef(baseRev, baseView)
+		data := map[string]any{"Base": base, "Query": template.URL(r.URL.RawQuery)}
+		c, cerr := compare(l, base, head)
+		snap, results := c.Head, c.Edges
+		if cerr != nil {
+			// Not a git repo, or no such base. Still show the contract; without a
+			// base the verdicts only say whether each call exists in this state.
+			var err error
+			if snap, err = LoadSnapshot(l, head); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			data["CompareErr"] = cerr.Error()
+			results = CheckEdges(snap, nil)
+		}
 		cov := Coverage(snap)
-		data := map[string]any{"Snap": snap, "Uncovered": uncovered(cov), "Query": template.URL(r.URL.RawQuery),
-			"Operations": len(cov), "Covered": len(cov) - len(uncovered(cov))}
-		failing := 0
+		data["Snap"], data["Uncovered"] = snap, uncovered(cov)
+		data["Operations"], data["Covered"] = len(cov), len(cov)-len(uncovered(cov))
+		failing, risky := 0, 0
 		for _, e := range results {
-			if e.Verdict == Breaking {
+			switch e.Verdict {
+			case Breaking:
 				failing++
+			case Risky:
+				risky++
 			}
 		}
-		data["Failing"] = failing
+		data["Failing"], data["Risky"] = failing, risky
 		data["FlowRows"], data["ServiceRows"] = FlowRows(snap.Flows, results), ServiceRows(cov, results)
 		if edges := SystemMap(results); len(edges) > 0 {
 			hasSpec := map[string]bool{}
@@ -400,7 +422,7 @@ func routes(l Layout) http.Handler {
 			}
 			data["Map"] = svg
 		}
-		render(w, r, "index.html", "", nav(data, "overview", ref, nil))
+		render(w, r, "index.html", "", nav(data, "overview", head, &base))
 	})
 
 	spec := func(w http.ResponseWriter, r *http.Request) {

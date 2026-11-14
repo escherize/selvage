@@ -1004,14 +1004,16 @@ paths:
 		}
 	}
 	header := regexp.MustCompile(`(?s)<header>.*?</header>`)
-	const index = `href="/?rev=HEAD&amp;view=master`
-	for target, c := range map[string]struct{ current, changes string }{
+	// Index links carry the base too, because the index compares.
+	const same = `href="/?base=HEAD&amp;base_view=master&amp;rev=HEAD&amp;view=master`
+	const other = `href="/?base=HEAD&amp;base_view=main&amp;rev=HEAD&amp;view=master`
+	for target, c := range map[string]struct{ current, index, changes string }{
 		// A page showing one state links to a comparison of HEAD with it, in the same view.
-		"/?rev=HEAD&view=master":         {"Overview", `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
-		"/spec/svc?rev=HEAD&view=master": {"Services", `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
+		"/?rev=HEAD&view=master":         {"Overview", same, `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
+		"/spec/svc?rev=HEAD&view=master": {"Services", same, `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
 		// A page that compares keeps its own base.
-		"/flow/f07?head=HEAD&head_view=master&base=HEAD&base_view=main": {"Flows", `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
-		"/diff?head=HEAD&head_view=master&base=HEAD&base_view=main":     {"Changes", `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
+		"/flow/f07?head=HEAD&head_view=master&base=HEAD&base_view=main": {"Flows", other, `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
+		"/diff?head=HEAD&head_view=master&base=HEAD&base_view=main":     {"Changes", other, `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
 	} {
 		rec := httptest.NewRecorder()
 		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
@@ -1023,10 +1025,10 @@ paths:
 			t.Errorf("%s: want only %s marked current in %s", target, c.current, got)
 		}
 		// brand, Overview, Services and Flows all open the index in this revision and view
-		if n := strings.Count(got, index); n != 4 {
+		if n := strings.Count(got, c.index); n != 4 {
 			t.Errorf("%s: %d of 4 index links keep the revision and view:\n%s", target, n, got)
 		}
-		for _, want := range []string{index + `#services"`, index + `#flows"`, c.changes} {
+		for _, want := range []string{c.index + `#services"`, c.index + `#flows"`, c.changes} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s: want %s in\n%s", target, want, got)
 			}
@@ -1072,6 +1074,65 @@ func TestSystemMap(t *testing.T) {
 	// A name that needs quoting must not break the diagram.
 	if _, err := renderSVG(mapD2([]MapEdge{{"a b", "c.d", 1, Safe}}, nil)); err != nil {
 		t.Errorf("quoted names: %v", err)
+	}
+}
+
+// The index judges calls the way the Changes page does: base against head.
+func TestIndexCompares(t *testing.T) {
+	dir := overlay(t, "example/v1", "example/v1")
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@localhost",
+			"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	get := func(target string) string {
+		rec := httptest.NewRecorder()
+		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != 200 {
+			t.Fatalf("%s: HTTP %d: %s", target, rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+	// Not a git repo: no comparison, and the page says so instead of claiming compatibility.
+	if body := get("/"); !strings.Contains(body, "Not compared with a base") || !strings.Contains(body, "Every call exists") {
+		t.Error("without a base the index must say it did not compare")
+	}
+	git("init", "-q")
+	git("add", "-A")
+	git("commit", "-qm", "v1")
+	if body := get("/"); !strings.Contains(body, "No call breaks") || strings.Contains(body, "Not compared") {
+		t.Error("unchanged working tree: want 'No call breaks'")
+	}
+	// v2 breaks callers through spec changes alone (a new required request field, a renamed operation).
+	err := filepath.WalkDir("example/v2", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel("example/v2", p)
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, rel), data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := get("/")
+	want := 0
+	for _, e := range runCheck(layoutOf(dir), ParseRef("HEAD", ""), Ref{}, false).Edges {
+		if e.Verdict == "breaking" {
+			want++
+		}
+	}
+	if want == 0 || !strings.Contains(body, fmt.Sprintf(">%d calls break<", want)) && !strings.Contains(body, ">1 call breaks<") {
+		t.Errorf("want %d breaking calls on the index, as check reports", want)
+	}
+	if !strings.Contains(body, "breaking&#34;") && !strings.Contains(body, ", breaking") {
+		t.Error("the map has no breaking arrow")
 	}
 }
 

@@ -33,7 +33,8 @@ func export(l Layout, base, head Ref, dir string) error {
 	cmp := url.Values{"base": {base.Rev}, "base_view": {base.ViewString()}, "head": {head.Rev}, "head_view": {head.ViewString()}}.Encode()
 	at := url.Values{"rev": {head.Rev}, "view": {head.ViewString()}}.Encode()
 
-	pages := map[string]string{"/": "?" + at, "/diff": "?" + cmp}
+	idx := url.Values{"rev": {head.Rev}, "view": {head.ViewString()}, "base": {base.Rev}, "base_view": {base.ViewString()}}.Encode()
+	pages := map[string]string{"/": "?" + idx, "/diff": "?" + cmp}
 	for _, svc := range snap.Services() {
 		pages["/spec/"+svc] = "?" + at
 		for _, op := range operations(snap.Specs[svc].Spec) {
