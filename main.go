@@ -332,6 +332,26 @@ func render(w http.ResponseWriter, r *http.Request, page, fragment string, data 
 	}
 }
 
+// nav fills in what the header needs: the active section, and links that keep
+// the revision and view the page is showing.
+//
+// NavIndex is the query for pages that show one state (index, spec). NavDiff
+// is the query for pages that compare (flow, diff). base is nil on a page that
+// shows one state; the comparison it links to is then HEAD against that state
+// in the same view, so the view's own filtering is not reported as a change.
+func nav(data map[string]any, section string, head Ref, base *Ref) map[string]any {
+	if base == nil {
+		base = &Ref{Rev: "HEAD", View: head.View}
+	}
+	data["Section"] = section
+	data["NavIndex"] = template.URL(url.Values{"rev": {head.Rev}, "view": {head.ViewString()}}.Encode())
+	data["NavDiff"] = template.URL(url.Values{
+		"base": {base.Rev}, "base_view": {base.ViewString()},
+		"head": {head.Rev}, "head_view": {head.ViewString()},
+	}.Encode())
+	return data
+}
+
 // refs reads base/base_view/head/head_view; base defaults to HEAD.
 func refs(r *http.Request) (base, head Ref) {
 	q := r.URL.Query()
@@ -348,12 +368,13 @@ func routes(l Layout) http.Handler {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		snap, err := LoadSnapshot(l, ParseRef(r.URL.Query().Get("rev"), r.URL.Query().Get("view")))
+		ref := ParseRef(r.URL.Query().Get("rev"), r.URL.Query().Get("view"))
+		snap, err := LoadSnapshot(l, ref)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		render(w, r, "index.html", "", map[string]any{"Snap": snap, "Uncovered": uncovered(Coverage(snap)), "Query": template.URL(r.URL.RawQuery)})
+		render(w, r, "index.html", "", nav(map[string]any{"Snap": snap, "Uncovered": uncovered(Coverage(snap)), "Query": template.URL(r.URL.RawQuery)}, "overview", ref, nil))
 	})
 
 	spec := func(w http.ResponseWriter, r *http.Request) {
@@ -378,9 +399,9 @@ func routes(l Layout) http.Handler {
 		} else if len(ops) > 0 {
 			sel = ops[0]
 		}
-		render(w, r, "spec.html", "op", map[string]any{
+		render(w, r, "spec.html", "op", nav(map[string]any{
 			"Snap": snap, "Service": r.PathValue("svc"), "Spec": info.Spec, "Ops": ops, "Sel": sel, "Prefix": pathPrefix(info.Spec), "Ref": ref, "Query": template.URL(r.URL.RawQuery),
-		})
+		}, "services", ref, nil))
 	}
 	mux.HandleFunc("GET /spec/{svc}", spec)
 	mux.HandleFunc("GET /spec/{svc}/op/{op}", spec)
@@ -431,7 +452,7 @@ func routes(l Layout) http.Handler {
 			data["DiagramErr"] = err.Error()
 		}
 		data["SVG"] = svg
-		render(w, r, "flow.html", "", data)
+		render(w, r, "flow.html", "", nav(data, "flows", head, &base))
 	})
 
 	mux.HandleFunc("GET /diff", func(w http.ResponseWriter, r *http.Request) {
@@ -443,7 +464,7 @@ func routes(l Layout) http.Handler {
 		} else {
 			data["C"], data["Worst"], data["Snap"] = c, worst(c.Edges), c.Head
 		}
-		render(w, r, "diff.html", "results", data)
+		render(w, r, "diff.html", "", nav(data, "changes", head, &base))
 	})
 	return mux
 }

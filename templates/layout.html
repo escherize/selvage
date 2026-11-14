@@ -9,13 +9,12 @@
 </head>
 <body hx-boost="true">
 <header>
-  <a class="brand" href="/">selvage</a>
-  <nav>
-    {{with .Snap}}{{range .Services}}<a href="/spec/{{.}}">{{.}}</a>{{end}}
-    <span class="sep"></span>
-    {{range .Flows}}<a href="/flow/{{.Name}}">{{.Title}}</a>{{end}}{{end}}
-    <span class="sep"></span>
-    <a href="/diff">diff</a>
+  <a class="brand" href="/?{{.NavIndex}}">selvage</a>
+  <nav aria-label="Sections">
+    <a href="/?{{.NavIndex}}"{{if eq .Section "overview"}} aria-current="page"{{end}}>Overview</a>
+    <a href="/?{{.NavIndex}}#services"{{if eq .Section "services"}} aria-current="true"{{end}}>Services</a>
+    <a href="/?{{.NavIndex}}#flows"{{if eq .Section "flows"}} aria-current="true"{{end}}>Flows</a>
+    <a href="/diff?{{.NavDiff}}"{{if eq .Section "changes"}} aria-current="page"{{end}}>Changes</a>
   </nav>
 </header>
 <main>{{template "content" .}}</main>

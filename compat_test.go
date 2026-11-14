@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http/httptest"
 	"os"
@@ -978,5 +979,63 @@ func TestCheckJSONUncovered(t *testing.T) {
 	}
 	if !reflect.DeepEqual(off.Uncovered, on.Uncovered) {
 		t.Errorf("the flag changed the list: %v vs %v", off.Uncovered, on.Uncovered)
+	}
+}
+
+// The header has four fixed links however many flows exist, and they keep the page's view.
+func TestHeaderIsFixed(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "specs"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "flows"), 0o755)
+	os.WriteFile(filepath.Join(dir, "specs", "svc.yaml"), []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /a: {get: {operationId: getA, responses: {"200": {description: ok}}}}
+`), 0o644)
+	for i := 0; i < 30; i++ {
+		os.WriteFile(filepath.Join(dir, "flows", fmt.Sprintf("f%02d.flow", i)), []byte("web -> svc: getA\n"), 0o644)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-qm", "c"}} { // the cases below use rev=HEAD
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@localhost",
+			"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	header := regexp.MustCompile(`(?s)<header>.*?</header>`)
+	const index = `href="/?rev=HEAD&amp;view=master`
+	for target, c := range map[string]struct{ current, changes string }{
+		// A page showing one state links to a comparison of HEAD with it, in the same view.
+		"/?rev=HEAD&view=master":         {"Overview", `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
+		"/spec/svc?rev=HEAD&view=master": {"Services", `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
+		// A page that compares keeps its own base.
+		"/flow/f07?head=HEAD&head_view=master&base=HEAD&base_view=main": {"Flows", `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
+		"/diff?head=HEAD&head_view=master&base=HEAD&base_view=main":     {"Changes", `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
+	} {
+		rec := httptest.NewRecorder()
+		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
+		got := header.FindString(rec.Body.String())
+		if n := strings.Count(got, "<a "); n != 5 { // the brand and four sections
+			t.Errorf("%s: header has %d links, want 5", target, n)
+		}
+		if !regexp.MustCompile(`aria-current="[a-z]+">`+c.current+`<`).MatchString(got) || strings.Count(got, "aria-current") != 1 {
+			t.Errorf("%s: want only %s marked current in %s", target, c.current, got)
+		}
+		// brand, Overview, Services and Flows all open the index in this revision and view
+		if n := strings.Count(got, index); n != 4 {
+			t.Errorf("%s: %d of 4 index links keep the revision and view:\n%s", target, n, got)
+		}
+		for _, want := range []string{index + `#services"`, index + `#flows"`, c.changes} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: want %s in\n%s", target, want, got)
+			}
+		}
+	}
+	// Flow links on the index use the query the flow page reads.
+	rec := httptest.NewRecorder()
+	routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", "/?rev=HEAD&view=master", nil))
+	if !strings.Contains(rec.Body.String(), `href="/flow/f07?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`) {
+		t.Error("index flow links do not carry head and head_view")
 	}
 }
