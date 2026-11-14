@@ -1,5 +1,5 @@
 {{define "content"}}
-<h1>Compatibility</h1>
+<h1>Changes</h1>
 <form class="revs" action="/diff">{{template "refs" .}}</form>
 <div id="results">{{template "results" .}}</div>
 {{end}}
@@ -8,29 +8,45 @@
 {{with .Err}}<p class="err">{{.}}</p>{{end}}
 {{with .C}}
 {{template "errs" .Head.Errs}}
-<p class="summary"><span class="badge v-{{$.Worst}}">{{$.Worst}}</span>
-  {{len .Edges}} flow edges checked, {{.Base.Label}} &rarr; {{.Head.Label}}</p>
+<p class="summary">{{if not .Edges}}No flow describes a caller, so no call is checked
+  {{else if $.Problems}}{{if $.Breaking}}<span class="badge v-breaking">{{$.Breaking}} {{if eq $.Breaking 1}}call breaks{{else}}calls break{{end}}</span>{{end}}{{if and $.Breaking $.Risky}} and {{end}}{{if $.Risky}}<span class="badge v-risky">{{$.Risky}} {{if eq $.Risky 1}}call is{{else}}calls are{{end}} risky</span>{{end}}
+  out of {{len .Edges}}
+  {{else if .Head.Errs}}<span class="badge v-breaking">Incomplete</span> some files failed to load (above). No call breaks among the {{len .Edges}} that were checked
+  {{else}}<span class="badge v-safe">No call breaks</span> out of {{len .Edges}}
+  {{end}}going from {{.Base.Label}} to {{.Head.Label}}.</p>
 
-<h2>Flow edges</h2>
-<table class="steps">
-  <tr><th>flow</th><th>call</th><th>verdict</th></tr>
-  {{range .Edges}}
-  <tr>
-    <td><a href="/flow/{{.Flow}}?{{$.Query}}">{{.Flow}}</a><span class="muted">:{{.Step.Line}}</span></td>
-    <td>{{.Step.Consumer}} &rarr; {{.Step.Provider}}.{{.Step.OperationID}}</td>
-    <td><span class="badge v-{{.Verdict}}">{{.Verdict}}</span>{{range .Findings}}<div class="finding">{{.Text}}</div>{{end}}</td>
-  </tr>
-  {{end}}
-</table>
+{{with $.Problems}}
+<h2>Calls with problems</h2>
+{{template "edges" (pair . $.Query)}}
+{{end}}
+{{with $.SafeEdges}}
+<details class="fold"{{if not $.Problems}} open{{end}}>
+  <summary>{{len .}} safe {{if eq (len .) 1}}call{{else}}calls{{end}}</summary>
+  {{template "edges" (pair . $.Query)}}
+</details>
+{{end}}
 
 <h2>Spec changes <span class="muted">(oasdiff)</span></h2>
 {{if .Changes}}
-<table class="changes">
+<table class="changes stack">
   <tr><th>service</th><th>level</th><th>operation</th><th>change</th></tr>
   {{range .Changes}}
-  <tr><td>{{.Service}}</td><td><span class="lvl lvl-{{.Level}}">{{.Level}}</span></td><td><code>{{.Path}}</code></td><td>{{.Text}}</td></tr>
+  <tr><td>{{.Service}}</td><td><span class="lvl lvl-{{.Level}}">{{.Level}}</span></td><td class="wrap"><code>{{.Path}}</code></td><td class="wrap">{{.Text}}</td></tr>
   {{end}}
 </table>
 {{else}}<p class="muted">No spec changes.</p>{{end}}
 {{end}}
+{{end}}
+
+{{define "edges"}}
+<table class="steps stack">
+  <tr><th>flow</th><th>call</th><th>verdict</th></tr>
+  {{range .First}}
+  <tr>
+    <td class="wrap"><a href="/flow/{{.Flow}}?{{$.Second}}">{{.Flow}}</a><span class="muted">:{{.Step.Line}}</span></td>
+    <td class="wrap">{{.Step.Consumer}} &rarr; {{.Step.Provider}}.{{.Step.OperationID}}</td>
+    <td class="wrap"><span class="badge v-{{.Verdict}}">{{.Verdict}}</span>{{range .Findings}}<div class="finding">{{.Text}}</div>{{end}}</td>
+  </tr>
+  {{end}}
+</table>
 {{end}}

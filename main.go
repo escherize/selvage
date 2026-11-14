@@ -287,7 +287,9 @@ var pages = map[string]*template.Template{}
 
 func init() {
 	funcs := template.FuncMap{
-		"md": markdown,
+		// pair passes two values to a sub-template, which takes one.
+		"pair": func(a, b any) struct{ First, Second any } { return struct{ First, Second any }{a, b} },
+		"md":   markdown,
 		"response": func(op Op) Node {
 			status, s := successSchema(op.Op)
 			return schemaTree(status, s, false)
@@ -520,7 +522,23 @@ func routes(l Layout) http.Handler {
 		if err != nil {
 			data["Err"] = err.Error()
 		} else {
-			data["C"], data["Worst"], data["Snap"] = c, worst(c.Edges), c.Head
+			data["C"], data["Snap"] = c, c.Head
+			// Problems lead; safe calls are listed after them, folded away.
+			var problems, safe []EdgeResult
+			breaking := 0
+			for _, e := range c.Edges { // already worst first
+				switch {
+				case e.Verdict == Safe:
+					safe = append(safe, e)
+				default:
+					problems = append(problems, e)
+					if e.Verdict == Breaking {
+						breaking++
+					}
+				}
+			}
+			data["Problems"], data["SafeEdges"] = problems, safe
+			data["Breaking"], data["Risky"] = breaking, len(problems)-breaking
 		}
 		render(w, r, "diff.html", "", nav(data, "changes", head, &base))
 	})
