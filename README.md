@@ -68,7 +68,7 @@ flowchart TD
 5. **The fields the consumer sends exist.** Each field in `<- {...}` must be in the operation's request body schema, walked the same way. A missing field: breaking (`web sends "coupon", which is not in the createOrder request body`).
 6. **No spec change hurts this consumer.** selvage runs oasdiff between the base and head revision of each spec. Every change on the step's method and path gets a verdict for this consumer from the verdict rules below. With `reads`, a change is breaking only for consumers that read the property it names, so the same change can break one flow and be safe for another. `sends` and `omits` do the same for request properties.
 
-A step's verdict is the worst of its findings; the report's verdict is the worst step's. `check -base REV` exits 1 when any step is breaking.
+A step's verdict is the worst of its findings; the report's verdict is the worst step's. `check -base REV` exits 1 when any step is breaking, and with `-fail-uncovered` also when an operation has no flow.
 
 What it does not check:
 
@@ -136,7 +136,7 @@ go run . check -repo DIR -base origin/main      # exit 1 on a breaking edge
 }
 ```
 
-`edges` has one entry per flow step, worst first; a safe step has an empty `findings`. With `-fail-uncovered`, `uncovered` lists the operations no flow calls (`service`, `method`, `path`, `operation`) and any entry makes `exit` 1; without the flag it is `[]`. `verdict` is the worst edge (`safe`, `risky`, `breaking`), or `""` when nothing could be checked. It describes the edges only: a head file that failed to load makes `exit` 1 and appears in `errors` while `verdict` can still be `safe`, so gate on `exit`. `exit` equals the process exit status: 0 ok, 1 a breaking edge or a head error, 2 could not check (including a usage error such as a missing `-base`), in which case `error` says why. These field names are stable; new fields may be added.
+`edges` has one entry per flow step, worst first; a safe step has an empty `findings`. `uncovered` always lists the operations no flow calls (`service`, `method`, `path`, `operation`), so when `exit` is 0 or 1, `[]` means every operation that loaded has a flow (at `exit` 2 nothing was computed). An entry makes `exit` 1 only with `-fail-uncovered`. `verdict` is the worst edge (`safe`, `risky`, `breaking`), or `""` when nothing could be checked. It describes the edges only: a head file that failed to load, or with `-fail-uncovered` an uncovered operation, makes `exit` 1 while `verdict` can still be `safe`, so gate on `exit`. `exit` equals the process exit status: 0 ok, 1 a breaking edge, a head error, or (with `-fail-uncovered`) an uncovered operation, 2 could not check (including a usage error such as a missing `-base`), in which case `error` says why. These field names are stable; new fields may be added.
 
 Spec pages show each operation's full path (the `servers[0]` path plus the operation path) and render descriptions as Markdown. Raw HTML and images in a description are dropped.
 
