@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -27,6 +28,9 @@ const usage = `selvage - API contract viewer
   selvage check [layout flags] -base REV [-base-view V] [-head REV] [-head-view V]
       exit 1 if any flow edge breaks; head defaults to the working tree
       -json prints the result as one JSON document
+      -fail-uncovered also exits 1 when an operation has no flow
+  selvage coverage [layout flags] [-head REV] [-head-view V] [-fail-uncovered]
+      list each operation and the flows that call it; an operation with no flow has no checked consumer
   selvage export [layout flags] -out DIR [-base REV] [-base-view V] [-head REV] [-head-view V]
       write every page for one base/head comparison as a static site; base defaults to HEAD
 
@@ -51,6 +55,7 @@ func main() {
 	headView := fl.String("head-view", "", "x-status values to keep in head (empty = all)")
 	out := fl.String("out", "", "export: output directory")
 	asJSON := fl.Bool("json", false, "check: print one JSON document instead of text")
+	failUncovered := fl.Bool("fail-uncovered", false, "check, coverage: exit 1 when an operation has no flow")
 	fl.Parse(os.Args[2:])
 	if l.Repo == "" || l.Specs == "" || l.Flows == "" || l.Config == "" {
 		usageError(os.Args[1] == "check" && *asJSON, "-repo, -specs, -flows and -config must not be empty")
@@ -64,7 +69,9 @@ func main() {
 		if *base == "" {
 			usageError(*asJSON, "check: -base is required")
 		}
-		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView), *asJSON))
+		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView), *asJSON, *failUncovered))
+	case "coverage":
+		os.Exit(coverageReport(l, ParseRef(*head, *headView), *failUncovered))
 	case "export":
 		if *out == "" {
 			fmt.Fprintln(os.Stderr, "export: -out is required")
@@ -119,11 +126,45 @@ func compare(l Layout, baseRef, headRef Ref) (comparison, error) {
 	return c, nil
 }
 
+// coverageReport prints every operation with the flows that call it.
+func coverageReport(l Layout, head Ref, failUncovered bool) int {
+	snap, err := LoadSnapshot(l, head)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	for _, e := range snap.Errs {
+		fmt.Printf("ERROR    %s\n", e)
+	}
+	cs := Coverage(snap)
+	if len(cs) == 0 { // a mistyped -specs finds nothing; that must not read as full coverage
+		fmt.Fprintf(os.Stderr, "coverage: found no operations in %s at %s\n", l.Specs, snap.Label())
+		return 2
+	}
+	for _, c := range cs {
+		state := "covered"
+		if len(c.Flows) == 0 {
+			state = "uncovered"
+		}
+		fmt.Printf("%-9s %s %s %s %s", state, c.Service, c.Op.Method, c.Op.Path, c.Op.ID)
+		if len(c.Flows) > 0 {
+			fmt.Printf(" (%s)", strings.Join(c.Flows, ", "))
+		}
+		fmt.Println()
+	}
+	missing := len(uncovered(cs))
+	fmt.Printf("%d of %d operations have a flow at %s\n", len(cs)-missing, len(cs), snap.Label())
+	if len(snap.Errs) > 0 || (failUncovered && missing > 0) {
+		return 1
+	}
+	return 0
+}
+
 // usageError exits 2. With -json the reason still goes to stdout as a report,
 // so a caller that only reads the document sees why nothing was checked.
 func usageError(asJSON bool, msg string) {
 	if asJSON {
-		printJSON(checkReport{Exit: 2, Error: msg, Errors: []string{}, Edges: []checkEdge{}})
+		printJSON(checkReport{Exit: 2, Error: msg, Errors: []string{}, Edges: []checkEdge{}, Uncovered: []checkUncovered{}})
 	} else {
 		fmt.Fprintln(os.Stderr, msg)
 	}
@@ -151,6 +192,15 @@ type checkReport struct {
 	Error   string      `json:"error,omitempty"` // set when exit is 2
 	Errors  []string    `json:"errors"`          // head files that failed to load
 	Edges   []checkEdge `json:"edges"`           // one per flow step, worst first
+	// Operations no flow calls; filled only with -fail-uncovered, which makes any entry exit 1.
+	Uncovered []checkUncovered `json:"uncovered"`
+}
+
+type checkUncovered struct {
+	Service   string `json:"service"`
+	Method    string `json:"method"`
+	Path      string `json:"path"`
+	Operation string `json:"operation"`
 }
 
 type checkEdge struct {
@@ -169,8 +219,8 @@ type checkFinding struct {
 }
 
 // runCheck compares base and head and decides the exit status. No printing.
-func runCheck(l Layout, base, head Ref) checkReport {
-	r := checkReport{Base: base.Label(), Head: head.Label(), Errors: []string{}, Edges: []checkEdge{}}
+func runCheck(l Layout, base, head Ref, failUncovered bool) checkReport {
+	r := checkReport{Base: base.Label(), Head: head.Label(), Errors: []string{}, Edges: []checkEdge{}, Uncovered: []checkUncovered{}}
 	c, err := compare(l, base, head)
 	if err != nil {
 		r.Exit, r.Error = 2, err.Error()
@@ -192,15 +242,20 @@ func runCheck(l Layout, base, head Ref) checkReport {
 		r.Edges = append(r.Edges, ce)
 	}
 	r.Verdict = worst(c.Edges).String()
-	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking {
+	if failUncovered {
+		for _, u := range uncovered(Coverage(c.Head)) {
+			r.Uncovered = append(r.Uncovered, checkUncovered{u.Service, u.Op.Method, u.Op.Path, u.Op.ID})
+		}
+	}
+	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking || len(r.Uncovered) > 0 {
 		r.Exit = 1
 	}
 	return r
 }
 
 // check prints the report as text, or as one JSON document, and returns the exit status.
-func check(l Layout, base, head Ref, asJSON bool) int {
-	r := runCheck(l, base, head)
+func check(l Layout, base, head Ref, asJSON, failUncovered bool) int {
+	r := runCheck(l, base, head, failUncovered)
 	if asJSON {
 		return printJSON(r)
 	}
@@ -215,6 +270,9 @@ func check(l Layout, base, head Ref, asJSON bool) int {
 		for _, f := range e.Findings {
 			fmt.Printf("%-8s %s:%d %s -> %s %s: %s\n", f.Verdict, e.Flow, e.Line, e.Consumer, e.Provider, e.Operation, f.Text)
 		}
+	}
+	for _, u := range r.Uncovered {
+		fmt.Printf("uncovered %s %s %s %s: no flow calls this operation\n", u.Service, u.Method, u.Path, u.Operation)
 	}
 	if r.Exit == 0 {
 		fmt.Printf("ok: %d flow edges compatible between %s and %s\n", len(r.Edges), r.Base, r.Head)
@@ -294,7 +352,7 @@ func routes(l Layout) http.Handler {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		render(w, r, "index.html", "", map[string]any{"Snap": snap, "Query": template.URL(r.URL.RawQuery)})
+		render(w, r, "index.html", "", map[string]any{"Snap": snap, "Uncovered": uncovered(Coverage(snap)), "Query": template.URL(r.URL.RawQuery)})
 	})
 
 	spec := func(w http.ResponseWriter, r *http.Request) {
@@ -347,6 +405,16 @@ func routes(l Layout) http.Handler {
 			return
 		}
 		data["Snap"], data["Flow"] = snap, f
+		// Link each step to its operation in the same view as this page. An
+		// operation the view lacks has no page there, so it is not linked.
+		known := map[string]bool{}
+		for _, s := range f.Steps {
+			if spec, ok := snap.Specs[s.Provider]; ok {
+				_, known[s.Provider+" "+s.OperationID] = findOp(spec.Spec, s.OperationID)
+			}
+		}
+		data["Known"] = known
+		data["SpecQuery"] = template.URL(url.Values{"rev": {head.Rev}, "view": {head.ViewString()}}.Encode())
 		var results []EdgeResult
 		if cerr == nil {
 			for _, e := range c.Edges {

@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"io/fs"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -801,6 +803,101 @@ paths:
 	}
 }
 
+// A step whose operation the page's view lacks is plain text; the others link into the same view.
+func TestFlowLinksStayInView(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "specs"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "flows"), 0o755)
+	os.WriteFile(filepath.Join(dir, "specs", "svc.yaml"), []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /a: {get: {operationId: getA, responses: {"200": {description: ok}}}}
+  /b: {get: {operationId: getB, x-status: proposed, responses: {"200": {description: ok}}}}
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "flows", "f.flow"), []byte("web -> svc: getA\nweb -> svc: getB\nweb -> nope: getC\n"), 0o644)
+	get := func(target string) string {
+		rec := httptest.NewRecorder()
+		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != 200 {
+			t.Fatalf("%s: HTTP %d", target, rec.Code)
+		}
+		return rec.Body.String()
+	}
+
+	body := get("/flow/f?head_view=master")
+	for _, want := range []string{
+		`href="/spec/svc/op/getA?rev=&amp;view=master"`, // same view as the flow page
+		`<span title="not in working tree [master]">svc.getB</span>`,
+		`<span title="not in working tree [master]">nope.getC</span>`, // no spec for the service
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("view master: want %s", want)
+		}
+	}
+	if strings.Contains(body, `op/getB`) || strings.Contains(body, `op/getC`) {
+		t.Error("view master: a missing operation is still linked")
+	}
+	// With no view the proposed operation exists, so it is linked.
+	if body := get("/flow/f"); !strings.Contains(body, `href="/spec/svc/op/getB?rev=&amp;view="`) {
+		t.Error("no view: getB should be linked")
+	}
+	// The linked page exists in that view; the unlinked one would not.
+	get("/spec/svc/op/getA?rev=&view=master")
+}
+
+// An operation counts as covered when any flow has a step for that service and operationId.
+func TestCoverage(t *testing.T) {
+	spec, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /a: {get: {operationId: getA, responses: {"200": {description: ok}}}}
+  /b: {get: {operationId: getB, responses: {"200": {description: ok}}}, post: {responses: {"200": {description: ok}}}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := Snapshot{
+		Specs: map[string]*load.SpecInfo{"svc": {Spec: spec}},
+		Flows: []Flow{
+			{Name: "two", Steps: []Step{{Provider: "svc", OperationID: "getA"}, {Provider: "other", OperationID: "getB"}}},
+			{Name: "one", Steps: []Step{{Provider: "svc", OperationID: "getA"}, {Provider: "svc", OperationID: "post_b"}}},
+		},
+	}
+	got := map[string]string{}
+	for _, c := range Coverage(snap) {
+		got[c.Op.ID] = strings.Join(c.Flows, ",")
+	}
+	// getB is only called on another service; the id-less POST is matched by its generated id.
+	want := map[string]string{"getA": "one,two", "getB": "", "post_b": "one"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if u := uncovered(Coverage(snap)); len(u) != 1 || u[0].Op.ID != "getB" {
+		t.Errorf("uncovered: %+v", u)
+	}
+
+	// Two operations with one id: check only ever judges the first, so only it is covered.
+	dup, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /a: {get: {operationId: dup, responses: {"200": {description: ok}}}}
+  /b: {get: {operationId: dup, responses: {"200": {description: ok}}}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap = Snapshot{Specs: map[string]*load.SpecInfo{"svc": {Spec: dup}},
+		Flows: []Flow{{Name: "f", Steps: []Step{{Provider: "svc", OperationID: "dup"}}}}}
+	judged, _ := findOp(dup, "dup")
+	u := uncovered(Coverage(snap))
+	if len(u) != 1 || u[0].Op.Path == judged.Path {
+		t.Errorf("want the operation check does not judge to be uncovered, got %+v (check judges %s)", u, judged.Path)
+	}
+}
+
 // The -json document: field names are a contract, and exit mirrors the process status.
 func TestCheckJSON(t *testing.T) {
 	// HEAD = example/v1, working tree = example/v2, as scripts/demo.sh builds it.
@@ -833,7 +930,7 @@ func TestCheckJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := runCheck(layoutOf(dir), ParseRef("HEAD", ""), Ref{})
+	r := runCheck(layoutOf(dir), ParseRef("HEAD", ""), Ref{}, false)
 	if r.Exit != 1 || r.Verdict != "breaking" || r.Error != "" || len(r.Edges) == 0 {
 		t.Fatalf("report: %+v", r)
 	}
@@ -843,7 +940,7 @@ func TestCheckJSON(t *testing.T) {
 	data, _ := json.Marshal(r)
 	var doc map[string]any
 	json.Unmarshal(data, &doc)
-	for _, k := range []string{"base", "head", "verdict", "exit", "errors", "edges"} {
+	for _, k := range []string{"base", "head", "verdict", "exit", "errors", "edges", "uncovered"} {
 		if _, ok := doc[k]; !ok {
 			t.Errorf("missing top-level field %q in %s", k, data)
 		}
@@ -856,9 +953,32 @@ func TestCheckJSON(t *testing.T) {
 	}
 
 	// Nothing to check is exit 2 with an error, and empty arrays rather than null.
-	r = runCheck(Layout{Repo: dir, Specs: "specs", Flows: "nowhere", Config: "selvage.yaml"}, ParseRef("HEAD", ""), Ref{})
+	r = runCheck(Layout{Repo: dir, Specs: "specs", Flows: "nowhere", Config: "selvage.yaml"}, ParseRef("HEAD", ""), Ref{}, false)
 	data, _ = json.Marshal(r)
 	if r.Exit != 2 || r.Error == "" || !strings.Contains(string(data), `"edges":[]`) || !strings.Contains(string(data), `"errors":[]`) {
 		t.Errorf("exit-2 report: %s", data)
+	}
+}
+
+// -fail-uncovered: uncovered operations are in the report and make it exit 1.
+func TestCheckJSONUncovered(t *testing.T) {
+	dir := overlay(t, "example/v1", "example/v1")
+	os.WriteFile(filepath.Join(dir, "flows", "refund.flow"), []byte("support -> payments: chargeCard\n"), 0o644)
+	git := exec.Command("git", "-C", dir, "init", "-q")
+	if out, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	// Base is the working tree itself: nothing changed, so only coverage can fail the check.
+	if r := runCheck(layoutOf(dir), Ref{}, Ref{}, false); r.Exit != 0 || len(r.Uncovered) != 0 {
+		t.Fatalf("without the flag: exit %d, uncovered %v", r.Exit, r.Uncovered)
+	}
+	r := runCheck(layoutOf(dir), Ref{}, Ref{}, true)
+	if r.Exit != 1 || r.Verdict != "safe" || len(r.Uncovered) == 0 {
+		t.Fatalf("with the flag: %+v", r)
+	}
+	for _, u := range r.Uncovered {
+		if u.Operation == "chargeCard" || u.Service == "" || u.Method == "" || u.Path == "" {
+			t.Errorf("bad uncovered entry %+v", u)
+		}
 	}
 }
