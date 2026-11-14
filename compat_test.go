@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"io/fs"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -893,5 +895,90 @@ paths:
 	u := uncovered(Coverage(snap))
 	if len(u) != 1 || u[0].Op.Path == judged.Path {
 		t.Errorf("want the operation check does not judge to be uncovered, got %+v (check judges %s)", u, judged.Path)
+	}
+}
+
+// The -json document: field names are a contract, and exit mirrors the process status.
+func TestCheckJSON(t *testing.T) {
+	// HEAD = example/v1, working tree = example/v2, as scripts/demo.sh builds it.
+	dir := overlay(t, "example/v1", "example/v1")
+	git := func(args ...string) {
+		t.Helper()
+		// gpgsign and hooksPath: do not depend on the developer's global git config.
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@localhost",
+			"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("add", "-A")
+	git("commit", "-qm", "v1")
+	// Overwrite with v2 (os.CopyFS refuses to replace existing files).
+	err := filepath.WalkDir("example/v2", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel("example/v2", p)
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, rel), data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := runCheck(layoutOf(dir), ParseRef("HEAD", ""), Ref{}, false)
+	if r.Exit != 1 || r.Verdict != "breaking" || r.Error != "" || len(r.Edges) == 0 {
+		t.Fatalf("report: %+v", r)
+	}
+	if e := r.Edges[0]; e.Verdict != "breaking" || len(e.Findings) == 0 || e.Flow == "" || e.Line == 0 {
+		t.Errorf("edges are worst first with their findings, got %+v", e)
+	}
+	data, _ := json.Marshal(r)
+	var doc map[string]any
+	json.Unmarshal(data, &doc)
+	for _, k := range []string{"base", "head", "verdict", "exit", "errors", "edges", "uncovered"} {
+		if _, ok := doc[k]; !ok {
+			t.Errorf("missing top-level field %q in %s", k, data)
+		}
+	}
+	edge := doc["edges"].([]any)[0].(map[string]any)
+	for _, k := range []string{"flow", "line", "consumer", "provider", "operation", "verdict", "findings"} {
+		if _, ok := edge[k]; !ok {
+			t.Errorf("missing edge field %q", k)
+		}
+	}
+
+	// Nothing to check is exit 2 with an error, and empty arrays rather than null.
+	r = runCheck(Layout{Repo: dir, Specs: "specs", Flows: "nowhere", Config: "selvage.yaml"}, ParseRef("HEAD", ""), Ref{}, false)
+	data, _ = json.Marshal(r)
+	if r.Exit != 2 || r.Error == "" || !strings.Contains(string(data), `"edges":[]`) || !strings.Contains(string(data), `"errors":[]`) {
+		t.Errorf("exit-2 report: %s", data)
+	}
+}
+
+// -fail-uncovered: uncovered operations are in the report and make it exit 1.
+func TestCheckJSONUncovered(t *testing.T) {
+	dir := overlay(t, "example/v1", "example/v1")
+	os.WriteFile(filepath.Join(dir, "flows", "refund.flow"), []byte("support -> payments: chargeCard\n"), 0o644)
+	git := exec.Command("git", "-C", dir, "init", "-q")
+	if out, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	// Base is the working tree itself: nothing changed, so only coverage can fail the check.
+	if r := runCheck(layoutOf(dir), Ref{}, Ref{}, false); r.Exit != 0 || len(r.Uncovered) != 0 {
+		t.Fatalf("without the flag: exit %d, uncovered %v", r.Exit, r.Uncovered)
+	}
+	r := runCheck(layoutOf(dir), Ref{}, Ref{}, true)
+	if r.Exit != 1 || r.Verdict != "safe" || len(r.Uncovered) == 0 {
+		t.Fatalf("with the flag: %+v", r)
+	}
+	for _, u := range r.Uncovered {
+		if u.Operation == "chargeCard" || u.Service == "" || u.Method == "" || u.Path == "" {
+			t.Errorf("bad uncovered entry %+v", u)
+		}
 	}
 }

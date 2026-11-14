@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"html/template"
@@ -26,6 +27,7 @@ const usage = `selvage - API contract viewer
       browse specs, flows and diffs
   selvage check [layout flags] -base REV [-base-view V] [-head REV] [-head-view V]
       exit 1 if any flow edge breaks; head defaults to the working tree
+      -json prints the result as one JSON document
       -fail-uncovered also exits 1 when an operation has no flow
   selvage coverage [layout flags] [-head REV] [-head-view V] [-fail-uncovered]
       list each operation and the flows that call it; an operation with no flow has no checked consumer
@@ -52,11 +54,11 @@ func main() {
 	head := fl.String("head", "", "head git revision (empty = working tree)")
 	headView := fl.String("head-view", "", "x-status values to keep in head (empty = all)")
 	out := fl.String("out", "", "export: output directory")
+	asJSON := fl.Bool("json", false, "check: print one JSON document instead of text")
 	failUncovered := fl.Bool("fail-uncovered", false, "check, coverage: exit 1 when an operation has no flow")
 	fl.Parse(os.Args[2:])
 	if l.Repo == "" || l.Specs == "" || l.Flows == "" || l.Config == "" {
-		fmt.Fprintln(os.Stderr, "-repo, -specs, -flows and -config must not be empty")
-		os.Exit(2)
+		usageError(os.Args[1] == "check" && *asJSON, "-repo, -specs, -flows and -config must not be empty")
 	}
 
 	switch os.Args[1] {
@@ -65,10 +67,9 @@ func main() {
 		log.Fatal(http.ListenAndServe(*addr, routes(l)))
 	case "check":
 		if *base == "" {
-			fmt.Fprintln(os.Stderr, "check: -base is required")
-			os.Exit(2)
+			usageError(*asJSON, "check: -base is required")
 		}
-		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView), *failUncovered))
+		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView), *asJSON, *failUncovered))
 	case "coverage":
 		os.Exit(coverageReport(l, ParseRef(*head, *headView), *failUncovered))
 	case "export":
@@ -159,37 +160,124 @@ func coverageReport(l Layout, head Ref, failUncovered bool) int {
 	return 0
 }
 
-func check(l Layout, base, head Ref, failUncovered bool) int {
+// usageError exits 2. With -json the reason still goes to stdout as a report,
+// so a caller that only reads the document sees why nothing was checked.
+func usageError(asJSON bool, msg string) {
+	if asJSON {
+		printJSON(checkReport{Exit: 2, Error: msg, Errors: []string{}, Edges: []checkEdge{}, Uncovered: []checkUncovered{}})
+	} else {
+		fmt.Fprintln(os.Stderr, msg)
+	}
+	os.Exit(2)
+}
+
+// printJSON writes r as one document; a failed write is reported as exit 2.
+func printJSON(r checkReport) int {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(r); err != nil {
+		fmt.Fprintln(os.Stderr, "check: writing JSON:", err)
+		return 2
+	}
+	return r.Exit
+}
+
+// checkReport is the result of `check`: the -json document, and what the text
+// output is printed from. Field names are a stable contract (see the README).
+type checkReport struct {
+	Base    string      `json:"base"`
+	Head    string      `json:"head"`
+	Verdict string      `json:"verdict"`         // worst edge verdict: safe, risky or breaking; "" when exit is 2. Edges only: see Exit and Errors for load failures
+	Exit    int         `json:"exit"`            // 0 ok, 1 a breaking edge or a head error, 2 could not check
+	Error   string      `json:"error,omitempty"` // set when exit is 2
+	Errors  []string    `json:"errors"`          // head files that failed to load
+	Edges   []checkEdge `json:"edges"`           // one per flow step, worst first
+	// Operations no flow calls; filled only with -fail-uncovered, which makes any entry exit 1.
+	Uncovered []checkUncovered `json:"uncovered"`
+}
+
+type checkUncovered struct {
+	Service   string `json:"service"`
+	Method    string `json:"method"`
+	Path      string `json:"path"`
+	Operation string `json:"operation"`
+}
+
+type checkEdge struct {
+	Flow      string         `json:"flow"`
+	Line      int            `json:"line"`
+	Consumer  string         `json:"consumer"`
+	Provider  string         `json:"provider"`
+	Operation string         `json:"operation"`
+	Verdict   string         `json:"verdict"`
+	Findings  []checkFinding `json:"findings"`
+}
+
+type checkFinding struct {
+	Verdict string `json:"verdict"`
+	Text    string `json:"text"`
+}
+
+// runCheck compares base and head and decides the exit status. No printing.
+func runCheck(l Layout, base, head Ref, failUncovered bool) checkReport {
+	r := checkReport{Base: base.Label(), Head: head.Label(), Errors: []string{}, Edges: []checkEdge{}, Uncovered: []checkUncovered{}}
 	c, err := compare(l, base, head)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
+		r.Exit, r.Error = 2, err.Error()
+		return r
 	}
-	for _, e := range c.Head.Errs {
-		fmt.Printf("ERROR    %s\n", e)
-	}
+	r.Errors = append(r.Errors, c.Head.Errs...)
 	// A mistyped -specs or -flows finds nothing; that must not pass the gate.
 	if len(c.Head.Specs) == 0 || len(c.Head.Flows) == 0 {
-		fmt.Fprintf(os.Stderr, "check: found %d specs in %s and %d flows in %s at %s\n", len(c.Head.Specs), l.Specs, len(c.Head.Flows), l.Flows, c.Head.Label())
-		return 2
+		r.Exit = 2
+		r.Error = fmt.Sprintf("check: found %d specs in %s and %d flows in %s at %s", len(c.Head.Specs), l.Specs, len(c.Head.Flows), l.Flows, c.Head.Label())
+		return r
 	}
 	for _, e := range c.Edges {
+		ce := checkEdge{Flow: e.Flow, Line: e.Step.Line, Consumer: e.Step.Consumer, Provider: e.Step.Provider,
+			Operation: e.Step.OperationID, Verdict: e.Verdict.String(), Findings: []checkFinding{}}
 		for _, f := range e.Findings {
-			fmt.Printf("%-8s %s:%d %s -> %s %s: %s\n", f.Verdict, e.Flow, e.Step.Line, e.Step.Consumer, e.Step.Provider, e.Step.OperationID, f.Text)
+			ce.Findings = append(ce.Findings, checkFinding{f.Verdict.String(), f.Text})
 		}
+		r.Edges = append(r.Edges, ce)
 	}
-	missing := 0
+	r.Verdict = worst(c.Edges).String()
 	if failUncovered {
 		for _, u := range uncovered(Coverage(c.Head)) {
-			fmt.Printf("uncovered %s %s %s %s: no flow calls this operation\n", u.Service, u.Op.Method, u.Op.Path, u.Op.ID)
-			missing++
+			r.Uncovered = append(r.Uncovered, checkUncovered{u.Service, u.Op.Method, u.Op.Path, u.Op.ID})
 		}
 	}
-	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking || missing > 0 {
-		return 1
+	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking || len(r.Uncovered) > 0 {
+		r.Exit = 1
 	}
-	fmt.Printf("ok: %d flow edges compatible between %s and %s\n", len(c.Edges), c.Base.Label(), c.Head.Label())
-	return 0
+	return r
+}
+
+// check prints the report as text, or as one JSON document, and returns the exit status.
+func check(l Layout, base, head Ref, asJSON, failUncovered bool) int {
+	r := runCheck(l, base, head, failUncovered)
+	if asJSON {
+		return printJSON(r)
+	}
+	for _, e := range r.Errors {
+		fmt.Printf("ERROR    %s\n", e)
+	}
+	if r.Exit == 2 {
+		fmt.Fprintln(os.Stderr, r.Error)
+		return 2
+	}
+	for _, e := range r.Edges {
+		for _, f := range e.Findings {
+			fmt.Printf("%-8s %s:%d %s -> %s %s: %s\n", f.Verdict, e.Flow, e.Line, e.Consumer, e.Provider, e.Operation, f.Text)
+		}
+	}
+	for _, u := range r.Uncovered {
+		fmt.Printf("uncovered %s %s %s %s: no flow calls this operation\n", u.Service, u.Method, u.Path, u.Operation)
+	}
+	if r.Exit == 0 {
+		fmt.Printf("ok: %d flow edges compatible between %s and %s\n", len(r.Edges), r.Base, r.Head)
+	}
+	return r.Exit
 }
 
 // ---- HTTP ----
