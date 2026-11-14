@@ -1063,7 +1063,8 @@ func TestSystemMap(t *testing.T) {
 		t.Errorf("got %+v\nwant %+v", got, want)
 	}
 	src := mapD2(got, map[string]bool{"orders": true, "payments": true})
-	for _, s := range []string{`"web" -> "payments": "1 operation, breaking"`, `"web" -> "orders": "2 operations, risky"`, `"orders" -> "payments": "1 operation"`} {
+	// orders=n0, payments=n1, web=n2, in edge order
+	for _, s := range []string{`n2 -> n1: '1 operation, breaking'`, `n2 -> n0: '2 operations, risky'`, `n0 -> n1: '1 operation'`, `n0: 'orders'`} {
 		if !strings.Contains(src, s) {
 			t.Errorf("D2 source lacks %s:\n%s", s, src)
 		}
@@ -1133,5 +1134,42 @@ func TestIndexCompares(t *testing.T) {
 	}
 	if !strings.Contains(body, "breaking&#34;") && !strings.Contains(body, ", breaking") {
 		t.Error("the map has no breaking arrow")
+	}
+}
+
+// Party names come from flow files, which may be a contributor's branch. D2's
+// layout pastes node ids into JavaScript it runs, so a name must never be an id.
+func TestSystemMapNamesAreNotCode(t *testing.T) {
+	for _, name := range []string{
+		"x${(()=>{throw new Error('JS_RAN_42')})()}", // would run in the layout engine
+		"a`b", "${x}", `a"b`, `a\b`, "it's", "a;b{c}->d", "<script>alert(1)</script>",
+	} {
+		svg, err := renderSVG(mapD2([]MapEdge{{name, "svc", 1, Safe}, {"web", name, 2, Breaking}}, map[string]bool{"svc": true}))
+		if err != nil {
+			t.Errorf("%q: %v", name, err)
+			continue
+		}
+		if strings.Contains(string(svg), "<script>alert") {
+			t.Errorf("%q: unescaped in the SVG", name)
+		}
+	}
+	// The source uses generated ids; names appear only as quoted labels.
+	src := mapD2([]MapEdge{{"web", "orders", 1, Safe}}, nil)
+	if !strings.Contains(src, "n0 -> n1") || strings.Contains(src, "web ->") || strings.Contains(src, `"web" ->`) {
+		t.Errorf("names used as ids:\n%s", src)
+	}
+}
+
+// A map too large to lay out quickly is omitted, with a note; the page still renders.
+func TestSystemMapCap(t *testing.T) {
+	var edges []MapEdge
+	for i := 0; i <= maxMapParties; i++ {
+		edges = append(edges, MapEdge{Consumer: "web", Provider: fmt.Sprintf("svc%d", i), Operations: 1})
+	}
+	if n := mapParties(edges); n != maxMapParties+2 {
+		t.Fatalf("parties = %d", n)
+	}
+	if n := mapParties(edges[:maxMapParties-1]); n != maxMapParties {
+		t.Fatalf("parties at the limit = %d", n)
 	}
 }

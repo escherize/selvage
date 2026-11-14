@@ -410,7 +410,10 @@ func routes(l Layout) http.Handler {
 			}
 		}
 		data["Failing"], data["Risky"] = failing, risky
-		if edges := SystemMap(results); len(edges) > 0 {
+		edges := SystemMap(results)
+		if n := mapParties(edges); n > maxMapParties {
+			data["MapOmitted"] = n
+		} else if len(edges) > 0 {
 			hasSpec := map[string]bool{}
 			for _, svc := range snap.Services() {
 				hasSpec[svc] = true
@@ -426,6 +429,13 @@ func routes(l Layout) http.Handler {
 
 	spec := func(w http.ResponseWriter, r *http.Request) {
 		ref := ParseRef(r.URL.Query().Get("rev"), r.URL.Query().Get("view"))
+		// A spec page shows one state, but keeps the base it was reached with so
+		// the header leads back to the same comparison.
+		var base *Ref
+		if q := r.URL.Query(); q.Has("base") {
+			b := ParseRef(q.Get("base"), q.Get("base_view"))
+			base = &b
+		}
 		snap, err := LoadSnapshot(l, ref)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -448,7 +458,7 @@ func routes(l Layout) http.Handler {
 		}
 		render(w, r, "spec.html", "op", nav(map[string]any{
 			"Snap": snap, "Service": r.PathValue("svc"), "Spec": info.Spec, "Ops": ops, "Sel": sel, "Prefix": pathPrefix(info.Spec), "Ref": ref, "Query": template.URL(r.URL.RawQuery),
-		}, "services", ref, nil))
+		}, "services", ref, base))
 	}
 	mux.HandleFunc("GET /spec/{svc}", spec)
 	mux.HandleFunc("GET /spec/{svc}/op/{op}", spec)

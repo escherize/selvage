@@ -54,7 +54,6 @@ th { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.08em; color
 .diagram { width: fit-content; max-width: 100%; box-sizing: border-box; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 1rem; overflow-x: auto; margin-bottom: 1rem; }
 .diagram svg { max-width: 100%; height: auto; }
 figure.diagram { margin-left: 0; margin-right: 0; }
-.map svg { min-width: 30rem; } /* on a narrow screen, scroll the map rather than shrink its labels */
 .diagram figcaption { color: #6b6b70; font-size: 0.85em; max-width: 60ch; margin-top: 0.5rem; }
 .badge { display: inline-block; padding: 0 0.5em; border-radius: 999px; font-size: 0.8em; font-weight: 600; color: #fff; }
 .v-safe { background: var(--safe); } .v-risky { background: var(--risky); } .v-breaking { background: var(--breaking); }
@@ -69,4 +68,7 @@ figure.diagram { margin-left: 0; margin-right: 0; }
   header { gap: 0.2rem 0.9rem; padding: 0.6rem 1rem; }
   nav { gap: 0.8rem; }
   main { padding: 1rem; }
+}
+@media (max-width: 700px) {
+  .map svg { max-width: none; } /* keep the map at its drawn size and scroll the box, so labels stay readable */
 }
