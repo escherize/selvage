@@ -53,8 +53,7 @@ func main() {
 	asJSON := fl.Bool("json", false, "check: print one JSON document instead of text")
 	fl.Parse(os.Args[2:])
 	if l.Repo == "" || l.Specs == "" || l.Flows == "" || l.Config == "" {
-		fmt.Fprintln(os.Stderr, "-repo, -specs, -flows and -config must not be empty")
-		os.Exit(2)
+		usageError(os.Args[1] == "check" && *asJSON, "-repo, -specs, -flows and -config must not be empty")
 	}
 
 	switch os.Args[1] {
@@ -63,8 +62,7 @@ func main() {
 		log.Fatal(http.ListenAndServe(*addr, routes(l)))
 	case "check":
 		if *base == "" {
-			fmt.Fprintln(os.Stderr, "check: -base is required")
-			os.Exit(2)
+			usageError(*asJSON, "check: -base is required")
 		}
 		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView), *asJSON))
 	case "export":
@@ -121,12 +119,34 @@ func compare(l Layout, baseRef, headRef Ref) (comparison, error) {
 	return c, nil
 }
 
+// usageError exits 2. With -json the reason still goes to stdout as a report,
+// so a caller that only reads the document sees why nothing was checked.
+func usageError(asJSON bool, msg string) {
+	if asJSON {
+		printJSON(checkReport{Exit: 2, Error: msg, Errors: []string{}, Edges: []checkEdge{}})
+	} else {
+		fmt.Fprintln(os.Stderr, msg)
+	}
+	os.Exit(2)
+}
+
+// printJSON writes r as one document; a failed write is reported as exit 2.
+func printJSON(r checkReport) int {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(r); err != nil {
+		fmt.Fprintln(os.Stderr, "check: writing JSON:", err)
+		return 2
+	}
+	return r.Exit
+}
+
 // checkReport is the result of `check`: the -json document, and what the text
 // output is printed from. Field names are a stable contract (see the README).
 type checkReport struct {
 	Base    string      `json:"base"`
 	Head    string      `json:"head"`
-	Verdict string      `json:"verdict"`         // worst edge verdict: safe, risky or breaking
+	Verdict string      `json:"verdict"`         // worst edge verdict: safe, risky or breaking; "" when exit is 2. Edges only: see Exit and Errors for load failures
 	Exit    int         `json:"exit"`            // 0 ok, 1 a breaking edge or a head error, 2 could not check
 	Error   string      `json:"error,omitempty"` // set when exit is 2
 	Errors  []string    `json:"errors"`          // head files that failed to load
@@ -182,10 +202,7 @@ func runCheck(l Layout, base, head Ref) checkReport {
 func check(l Layout, base, head Ref, asJSON bool) int {
 	r := runCheck(l, base, head)
 	if asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		enc.Encode(r)
-		return r.Exit
+		return printJSON(r)
 	}
 	for _, e := range r.Errors {
 		fmt.Printf("ERROR    %s\n", e)

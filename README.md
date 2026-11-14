@@ -135,7 +135,7 @@ go run . check -repo DIR -base origin/main      # exit 1 on a breaking edge
 }
 ```
 
-`edges` has one entry per flow step, worst first; a safe step has an empty `findings`. `verdict` is the worst edge (`safe`, `risky`, `breaking`). `errors` lists head files that failed to load. `exit` equals the process exit status: 0 ok, 1 a breaking edge or a head error, 2 could not check, in which case `error` says why. These field names are stable; new fields may be added.
+`edges` has one entry per flow step, worst first; a safe step has an empty `findings`. `verdict` is the worst edge (`safe`, `risky`, `breaking`), or `""` when nothing could be checked. It describes the edges only: a head file that failed to load makes `exit` 1 and appears in `errors` while `verdict` can still be `safe`, so gate on `exit`. `exit` equals the process exit status: 0 ok, 1 a breaking edge or a head error, 2 could not check (including a usage error such as a missing `-base`), in which case `error` says why. These field names are stable; new fields may be added.
 
 Spec pages show each operation's full path (the `servers[0]` path plus the operation path) and render descriptions as Markdown. Raw HTML and images in a description are dropped.
 
