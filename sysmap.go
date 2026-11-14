@@ -42,11 +42,14 @@ func SystemMap(results []EdgeResult) []MapEdge {
 	return out
 }
 
-// maxMapParties caps the map. D2's layout time grows fast with size (about
-// 1s at 60 parties, minutes at 200) and it runs under the diagram lock, so a
-// larger system gets the tables without the picture.
-// ponytail: a fixed cap; group parties into clusters if maps this big matter.
-const maxMapParties = 40
+// The map is capped on both parties and arrows. D2's layout time grows fast
+// with either (minutes at 200 parties and 400 arrows) and it runs under the
+// diagram lock, so a larger system gets the tables without the picture.
+// ponytail: fixed caps; group parties into clusters if maps this big matter.
+const (
+	maxMapParties = 40
+	maxMapEdges   = 80
+)
 
 // mapParties counts the distinct parties on the map.
 func mapParties(edges []MapEdge) int {
@@ -55,6 +58,11 @@ func mapParties(edges []MapEdge) int {
 		seen[e.Consumer], seen[e.Provider] = true, true
 	}
 	return len(seen)
+}
+
+// mapTooBig reports whether the map is over either cap.
+func mapTooBig(edges []MapEdge) bool {
+	return len(edges) > maxMapEdges || mapParties(edges) > maxMapParties
 }
 
 // mapD2 draws the system map as D2 source: callers on the left, the services

@@ -411,8 +411,8 @@ func routes(l Layout) http.Handler {
 		}
 		data["Failing"], data["Risky"] = failing, risky
 		edges := SystemMap(results)
-		if n := mapParties(edges); n > maxMapParties {
-			data["MapOmitted"] = n
+		if mapTooBig(edges) {
+			data["MapOmitted"] = fmt.Sprintf("%d parties and %d arrows", mapParties(edges), len(edges))
 		} else if len(edges) > 0 {
 			hasSpec := map[string]bool{}
 			for _, svc := range snap.Services() {

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/oasdiff/oasdiff/load"
@@ -1160,16 +1161,33 @@ func TestSystemMapNamesAreNotCode(t *testing.T) {
 	}
 }
 
-// A map too large to lay out quickly is omitted, with a note; the page still renders.
+// A map too large to lay out quickly is omitted: too many parties, or too many arrows between few parties.
 func TestSystemMapCap(t *testing.T) {
-	var edges []MapEdge
-	for i := 0; i <= maxMapParties; i++ {
-		edges = append(edges, MapEdge{Consumer: "web", Provider: fmt.Sprintf("svc%d", i), Operations: 1})
+	var wide []MapEdge // one caller, many services
+	for i := 0; i < maxMapParties; i++ {
+		wide = append(wide, MapEdge{Consumer: "web", Provider: fmt.Sprintf("svc%d", i), Operations: 1})
 	}
-	if n := mapParties(edges); n != maxMapParties+2 {
-		t.Fatalf("parties = %d", n)
+	if !mapTooBig(wide) || mapTooBig(wide[:maxMapParties-1]) {
+		t.Errorf("party cap: %d parties too big = %v, %d parties too big = %v",
+			mapParties(wide), mapTooBig(wide), mapParties(wide[:maxMapParties-1]), mapTooBig(wide[:maxMapParties-1]))
 	}
-	if n := mapParties(edges[:maxMapParties-1]); n != maxMapParties {
-		t.Fatalf("parties at the limit = %d", n)
+	var dense []MapEdge // few parties, every one calling every other
+	for i := 0; i < 10; i++ {
+		for j := 0; j < 10; j++ {
+			dense = append(dense, MapEdge{Consumer: fmt.Sprintf("c%d", i), Provider: fmt.Sprintf("p%d", j), Operations: 1})
+		}
+	}
+	if mapParties(dense) > maxMapParties || !mapTooBig(dense) || mapTooBig(dense[:maxMapEdges]) {
+		t.Errorf("arrow cap: %d arrows among %d parties too big = %v", len(dense), mapParties(dense), mapTooBig(dense))
+	}
+	// The largest map still drawn must lay out quickly; it runs under the diagram lock.
+	start := time.Now()
+	if _, err := renderSVG(mapD2(dense[:maxMapEdges], nil)); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("a map at the arrow cap took %s to lay out", d)
+	} else {
+		t.Logf("map at the arrow cap (%d arrows, %d parties): %s", maxMapEdges, mapParties(dense[:maxMapEdges]), d.Round(time.Millisecond))
 	}
 }
