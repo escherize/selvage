@@ -91,6 +91,27 @@ func successSchema(o *openapi3.Operation) (status string, s *openapi3.SchemaRef)
 	return "", nil
 }
 
+// statusSchema returns the application/json schema of the response that covers
+// this status: its own entry, else its range ("4XX"), else "default", as
+// OpenAPI resolves them. declared is false when no response covers it.
+func statusSchema(o *openapi3.Operation, code string) (s *openapi3.SchemaRef, declared bool) {
+	keys := []string{code, "default"}
+	if len(code) == 3 && code[1:] != "XX" {
+		keys = []string{code, code[:1] + "XX", "default"}
+	}
+	for _, k := range keys {
+		r := o.Responses.Map()[k]
+		if r == nil || r.Value == nil {
+			continue
+		}
+		if mt := r.Value.Content.Get("application/json"); mt != nil {
+			return mt.Schema, true
+		}
+		return nil, true
+	}
+	return nil, false
+}
+
 // requestSchema returns the application/json request body schema, or nil.
 func requestSchema(o *openapi3.Operation) *openapi3.SchemaRef {
 	if o.RequestBody == nil || o.RequestBody.Value == nil {

@@ -32,6 +32,9 @@ func flowD2(f Flow, results []EdgeResult) string {
 		if len(s.Fields) > 0 {
 			label += " (" + strings.Join(s.Fields, ", ") + ")"
 		}
+		for _, sr := range s.Status {
+			label += " | " + sr.Code + " (" + strings.Join(sr.Fields, ", ") + ")"
+		}
 		if len(s.Sends) > 0 {
 			label += " <- (" + strings.Join(s.Sends, ", ") + ")"
 		}

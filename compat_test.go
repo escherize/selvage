@@ -613,3 +613,101 @@ func TestExportOddNames(t *testing.T) {
 		t.Errorf("failed export wrote %d entries", len(entries))
 	}
 }
+
+// "409 {field}" on a step: the field must be in that status's JSON response.
+func TestStatusReads(t *testing.T) {
+	f, err := ParseFlow("f", "web -> svc: create {id} 409 {error.code, retry} 500 {msg} <- {name}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := f.Steps[0]
+	if len(s.Status) != 2 || s.Status[0].Code != "409" || strings.Join(s.Status[0].Fields, ",") != "error.code,retry" ||
+		s.Status[1].Code != "500" || strings.Join(s.Fields, ",") != "id" || strings.Join(s.Sends, ",") != "name" {
+		t.Fatalf("parsed %+v", s)
+	}
+
+	spec, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    post:
+      operationId: create
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: object, properties: {id: {type: string}}}}}}
+        "409": {description: busy, content: {application/json: {schema: {type: object, properties: {error: {type: object, properties: {code: {type: string}}}}}}}}
+        "500": {description: no body}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := Snapshot{Specs: map[string]*load.SpecInfo{"svc": {Spec: spec}}}
+	findings := func(status ...StatusRead) string {
+		var out []string
+		for _, f := range checkStep("f", Step{Consumer: "web", Provider: "svc", OperationID: "create", Status: status}, head, nil).Findings {
+			out = append(out, f.Verdict.String()+": "+f.Text)
+		}
+		return strings.Join(out, "; ")
+	}
+	for _, c := range []struct {
+		read StatusRead
+		want string // substring of the finding; "" means no finding
+	}{
+		{StatusRead{"409", []string{"error.code"}}, ""},
+		{StatusRead{"409", []string{"retry"}}, `breaking: web reads "retry", which is not in the create 409 response`},
+		{StatusRead{"500", nil}, ""}, // declared, no body: handling it is fine
+		{StatusRead{"500", []string{"msg"}}, `not in the create 500 response`},
+		{StatusRead{"418", nil}, `handles a 418 from create, which the spec does not declare`},
+	} {
+		got := findings(c.read)
+		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%+v: got %q, want %q", c.read, got, c.want)
+		}
+	}
+}
+
+// A status is covered by its own response, else its range, else default.
+func TestStatusRangeAndDefault(t *testing.T) {
+	f, err := ParseFlow("f", "web -> svc: op {id} 4XX {error.code} default {msg}\n")
+	if err != nil || len(f.Steps[0].Status) != 2 || f.Steps[0].Status[0].Code != "4XX" || f.Steps[0].Status[1].Code != "default" {
+		t.Fatalf("parse: %v %+v", err, f.Steps)
+	}
+	body := `{description: e, content: {application/json: {schema: {type: object, properties: {error: {type: object, properties: {code: {type: string}}}}}}}}`
+	load1 := func(responses string) *openapi3.T {
+		spec, err := loadSpec(t.TempDir(), "", "specs/svc.yaml", []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    get:
+      operationId: op
+      responses: {"200": {description: ok}, `+responses+`}
+`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return spec
+	}
+	for _, c := range []struct {
+		responses, code string
+		declared, field bool
+	}{
+		{`"4XX": ` + body, "409", true, true},
+		{`default: ` + body, "500", true, true},
+		{`"409": {description: bare}, "4XX": ` + body, "409", true, false}, // the exact entry wins
+		{`"4XX": ` + body, "500", false, false},
+		{`"4XX": ` + body, "4XX", true, true},
+		{`default: ` + body, "default", true, true},
+	} {
+		op, _ := findOp(load1(c.responses), "op")
+		s, declared := statusSchema(op.Op, c.code)
+		if declared != c.declared || hasField(s, "error.code") != c.field {
+			t.Errorf("%s with {%s}: declared=%v field=%v", c.code, c.responses[:6], declared, hasField(s, "error.code"))
+		}
+	}
+
+	// The reads rule sees fields read from a status, not only the 2xx list.
+	if !readsAny(Step{Status: []StatusRead{{"409", []string{"error.code"}}}}, []any{"error/code"}) {
+		t.Error("a change to error.code must count for a step with 409 {error.code}")
+	}
+}
