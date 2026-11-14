@@ -11,6 +11,7 @@
 <p class="summary">{{if not .Edges}}No flow describes a caller, so no call is checked
   {{else if $.Problems}}{{if $.Breaking}}<span class="badge v-breaking">{{$.Breaking}} {{if eq $.Breaking 1}}call breaks{{else}}calls break{{end}}</span>{{end}}{{if and $.Breaking $.Risky}} and {{end}}{{if $.Risky}}<span class="badge v-risky">{{$.Risky}} {{if eq $.Risky 1}}call is{{else}}calls are{{end}} risky</span>{{end}}
   out of {{len .Edges}}
+  {{else if .Head.Errs}}<span class="badge v-breaking">Incomplete</span> some files failed to load (above). No call breaks among the {{len .Edges}} that were checked
   {{else}}<span class="badge v-safe">No call breaks</span> out of {{len .Edges}}
   {{end}}going from {{.Base.Label}} to {{.Head.Label}}.</p>
 
@@ -27,10 +28,10 @@
 
 <h2>Spec changes <span class="muted">(oasdiff)</span></h2>
 {{if .Changes}}
-<table class="changes">
-  <tr><th class="wide">service</th><th>level</th><th>operation</th><th>change</th></tr>
+<table class="changes stack">
+  <tr><th>service</th><th>level</th><th>operation</th><th>change</th></tr>
   {{range .Changes}}
-  <tr><td class="wide">{{.Service}}</td><td><span class="lvl lvl-{{.Level}}">{{.Level}}</span></td><td class="wrap"><code>{{.Path}}</code></td><td class="wrap">{{.Text}}</td></tr>
+  <tr><td>{{.Service}}</td><td><span class="lvl lvl-{{.Level}}">{{.Level}}</span></td><td class="wrap"><code>{{.Path}}</code></td><td class="wrap">{{.Text}}</td></tr>
   {{end}}
 </table>
 {{else}}<p class="muted">No spec changes.</p>{{end}}
@@ -38,7 +39,7 @@
 {{end}}
 
 {{define "edges"}}
-<table class="steps">
+<table class="steps stack">
   <tr><th>flow</th><th>call</th><th>verdict</th></tr>
   {{range .First}}
   <tr>

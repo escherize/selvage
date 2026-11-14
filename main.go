@@ -522,7 +522,7 @@ func routes(l Layout) http.Handler {
 		if err != nil {
 			data["Err"] = err.Error()
 		} else {
-			data["C"], data["Worst"], data["Snap"] = c, worst(c.Edges), c.Head
+			data["C"], data["Snap"] = c, c.Head
 			// Problems lead; safe calls are listed after them, folded away.
 			var problems, safe []EdgeResult
 			breaking := 0

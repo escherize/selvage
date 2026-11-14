@@ -1334,6 +1334,13 @@ func TestChangesPageLeadsWithProblems(t *testing.T) {
 		t.Errorf("unchanged tree: want an open list of %d safe calls and no problems section", edges)
 	}
 
+	// A head file that fails to load must not leave a green badge, even when no call breaks.
+	os.WriteFile(filepath.Join(dir, "flows", "broken.flow"), []byte("this is not a step\n"), 0o644)
+	if body := get(); !strings.Contains(body, "Incomplete") || strings.Contains(body, `class="badge v-safe">No call breaks`) {
+		t.Error("with a head load error the summary must say the result is incomplete")
+	}
+	os.Remove(filepath.Join(dir, "flows", "broken.flow"))
+
 	// v2 breaks callers: problems come first and the safe calls are folded.
 	err := filepath.WalkDir("example/v2", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -1374,6 +1381,35 @@ func TestChangesPageLeadsWithProblems(t *testing.T) {
 		t.Error("a safe call is in the problems section, or a breaking call is in the fold")
 	}
 
+	// A rule can turn a finding risky; risky calls are problems too, counted apart from breaking ones.
+	os.WriteFile(filepath.Join(dir, "selvage.yaml"), []byte("rules:\n  response-property-enum-value-added: risky\n"), 0o644)
+	body = get()
+	r = runCheck(layoutOf(dir), ParseRef("HEAD", ""), Ref{}, false)
+	breaking, risky := 0, 0
+	for _, e := range r.Edges {
+		switch e.Verdict {
+		case "breaking":
+			breaking++
+		case "risky":
+			risky++
+		}
+	}
+	problems, fold = strings.Index(body, "Calls with problems"), strings.Index(body, `<details class="fold">`)
+	if risky != 1 || breaking == 0 || problems < 0 || fold < problems {
+		t.Fatalf("fixture: want one risky call beside breaking ones, got %d risky, %d breaking", risky, breaking)
+	}
+	if !strings.Contains(body, fmt.Sprintf("%d calls break", breaking)) || !strings.Contains(body, "1 call is risky") {
+		t.Errorf("summary must count %d breaking and 1 risky separately", breaking)
+	}
+	if n := strings.Count(body[problems:fold], `class="badge v-risky"`); n != 1 || strings.Contains(body[fold:], `class="badge v-risky"`) {
+		t.Errorf("the risky call must be in the problems section, not the fold (found %d there)", n)
+	}
+	// Flow links keep the comparison the page shows.
+	rec := httptest.NewRecorder()
+	routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", "/diff?base=HEAD&head_view=x", nil))
+	if !strings.Contains(rec.Body.String(), `href="/flow/checkout?base=HEAD&amp;head_view=x"`) {
+		t.Error("flow links on the Changes page lost the query")
+	}
 	// No flows: the page must not read as a pass.
 	os.RemoveAll(filepath.Join(dir, "flows"))
 	if body := get(); !strings.Contains(body, "no call is checked") || strings.Contains(body, "No call breaks") {

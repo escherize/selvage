@@ -50,7 +50,8 @@ th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(
 .badge { white-space: nowrap; }
 .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 th { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.revs { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+.revs { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+.revs input { max-width: 100%; }
 .revs input { font: inherit; padding: 0.2rem 0.4rem; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; width: 12em; }
 .diagram { width: fit-content; max-width: 100%; box-sizing: border-box; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 1rem; overflow-x: auto; margin-bottom: 1rem; }
 .diagram svg { max-width: 100%; height: auto; }
@@ -82,4 +83,10 @@ figure.diagram { margin-left: 0; margin-right: 0; }
 }
 @media (max-width: 700px) {
   .map svg { max-width: none; } /* keep the map at its drawn size and scroll the box, so labels stay readable */
+}
+@media (max-width: 480px) {
+  /* A wide table becomes one block per row, so words break only when one alone is wider than the screen. */
+  .stack tr { display: block; padding: 0.4rem 0; border-bottom: 1px solid var(--line); }
+  .stack tr:first-child { display: none; } /* the header row; each cell is self-explanatory here */
+  .stack td { display: block; border: 0; padding: 0.1rem 0.4rem; }
 }
