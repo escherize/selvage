@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/oasdiff/oasdiff/load"
@@ -1004,14 +1005,16 @@ paths:
 		}
 	}
 	header := regexp.MustCompile(`(?s)<header>.*?</header>`)
-	const index = `href="/?rev=HEAD&amp;view=master`
-	for target, c := range map[string]struct{ current, changes string }{
+	// Index links carry the base too, because the index compares.
+	const same = `href="/?base=HEAD&amp;base_view=master&amp;rev=HEAD&amp;view=master`
+	const other = `href="/?base=HEAD&amp;base_view=main&amp;rev=HEAD&amp;view=master`
+	for target, c := range map[string]struct{ current, index, changes string }{
 		// A page showing one state links to a comparison of HEAD with it, in the same view.
-		"/?rev=HEAD&view=master":         {"Overview", `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
-		"/spec/svc?rev=HEAD&view=master": {"Services", `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
+		"/?rev=HEAD&view=master":         {"Overview", same, `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
+		"/spec/svc?rev=HEAD&view=master": {"Services", same, `href="/diff?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`},
 		// A page that compares keeps its own base.
-		"/flow/f07?head=HEAD&head_view=master&base=HEAD&base_view=main": {"Flows", `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
-		"/diff?head=HEAD&head_view=master&base=HEAD&base_view=main":     {"Changes", `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
+		"/flow/f07?head=HEAD&head_view=master&base=HEAD&base_view=main": {"Flows", other, `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
+		"/diff?head=HEAD&head_view=master&base=HEAD&base_view=main":     {"Changes", other, `href="/diff?base=HEAD&amp;base_view=main&amp;head=HEAD&amp;head_view=master"`},
 	} {
 		rec := httptest.NewRecorder()
 		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
@@ -1023,10 +1026,10 @@ paths:
 			t.Errorf("%s: want only %s marked current in %s", target, c.current, got)
 		}
 		// brand, Overview, Services and Flows all open the index in this revision and view
-		if n := strings.Count(got, index); n != 4 {
+		if n := strings.Count(got, c.index); n != 4 {
 			t.Errorf("%s: %d of 4 index links keep the revision and view:\n%s", target, n, got)
 		}
-		for _, want := range []string{index + `#services"`, index + `#flows"`, c.changes} {
+		for _, want := range []string{c.index + `#services"`, c.index + `#flows"`, c.changes} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s: want %s in\n%s", target, want, got)
 			}
@@ -1037,5 +1040,154 @@ paths:
 	routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", "/?rev=HEAD&view=master", nil))
 	if !strings.Contains(rec.Body.String(), `href="/flow/f07?base=HEAD&amp;base_view=master&amp;head=HEAD&amp;head_view=master"`) {
 		t.Error("index flow links do not carry head and head_view")
+	}
+}
+
+// The system map has one edge per consumer -> provider pair, counting distinct operations and keeping the worst verdict.
+func TestSystemMap(t *testing.T) {
+	step := func(consumer, provider, op string, v Verdict) EdgeResult {
+		return EdgeResult{Step: Step{Consumer: consumer, Provider: provider, OperationID: op}, Verdict: v}
+	}
+	got := SystemMap([]EdgeResult{
+		step("web", "orders", "getOrder", Safe),
+		step("web", "orders", "getOrder", Risky), // same operation from another flow
+		step("web", "orders", "createOrder", Safe),
+		step("web", "payments", "charge", Breaking),
+		step("orders", "payments", "charge", Safe),
+	})
+	want := []MapEdge{
+		{"orders", "payments", 1, Safe},
+		{"web", "orders", 2, Risky},
+		{"web", "payments", 1, Breaking},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v\nwant %+v", got, want)
+	}
+	src := mapD2(got, map[string]bool{"orders": true, "payments": true})
+	// orders=n0, payments=n1, web=n2, in edge order
+	for _, s := range []string{`n2 -> n1: '1 operation, breaking'`, `n2 -> n0: '2 operations, risky'`, `n0 -> n1: '1 operation'`, `n0: 'orders'`} {
+		if !strings.Contains(src, s) {
+			t.Errorf("D2 source lacks %s:\n%s", s, src)
+		}
+	}
+	if _, err := renderSVG(src); err != nil {
+		t.Errorf("map does not render: %v", err)
+	}
+	// A name that needs quoting must not break the diagram.
+	if _, err := renderSVG(mapD2([]MapEdge{{"a b", "c.d", 1, Safe}}, nil)); err != nil {
+		t.Errorf("quoted names: %v", err)
+	}
+}
+
+// The index judges calls the way the Changes page does: base against head.
+func TestIndexCompares(t *testing.T) {
+	dir := overlay(t, "example/v1", "example/v1")
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@localhost",
+			"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	get := func(target string) string {
+		rec := httptest.NewRecorder()
+		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != 200 {
+			t.Fatalf("%s: HTTP %d: %s", target, rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+	// Not a git repo: no comparison, and the page says so instead of claiming compatibility.
+	if body := get("/"); !strings.Contains(body, "Not compared with a base") || !strings.Contains(body, "Every call exists") {
+		t.Error("without a base the index must say it did not compare")
+	}
+	git("init", "-q")
+	git("add", "-A")
+	git("commit", "-qm", "v1")
+	if body := get("/"); !strings.Contains(body, "No call breaks") || strings.Contains(body, "Not compared") {
+		t.Error("unchanged working tree: want 'No call breaks'")
+	}
+	// v2 breaks callers through spec changes alone (a new required request field, a renamed operation).
+	err := filepath.WalkDir("example/v2", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel("example/v2", p)
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, rel), data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := get("/")
+	want := 0
+	for _, e := range runCheck(layoutOf(dir), ParseRef("HEAD", ""), Ref{}, false).Edges {
+		if e.Verdict == "breaking" {
+			want++
+		}
+	}
+	if want == 0 || !strings.Contains(body, fmt.Sprintf(">%d calls break<", want)) && !strings.Contains(body, ">1 call breaks<") {
+		t.Errorf("want %d breaking calls on the index, as check reports", want)
+	}
+	if !strings.Contains(body, "breaking&#34;") && !strings.Contains(body, ", breaking") {
+		t.Error("the map has no breaking arrow")
+	}
+}
+
+// Party names come from flow files, which may be a contributor's branch. D2's
+// layout pastes node ids into JavaScript it runs, so a name must never be an id.
+func TestSystemMapNamesAreNotCode(t *testing.T) {
+	for _, name := range []string{
+		"x${(()=>{throw new Error('JS_RAN_42')})()}", // would run in the layout engine
+		"a`b", "${x}", `a"b`, `a\b`, "it's", "a;b{c}->d", "<script>alert(1)</script>",
+	} {
+		svg, err := renderSVG(mapD2([]MapEdge{{name, "svc", 1, Safe}, {"web", name, 2, Breaking}}, map[string]bool{"svc": true}))
+		if err != nil {
+			t.Errorf("%q: %v", name, err)
+			continue
+		}
+		if strings.Contains(string(svg), "<script>alert") {
+			t.Errorf("%q: unescaped in the SVG", name)
+		}
+	}
+	// The source uses generated ids; names appear only as quoted labels.
+	src := mapD2([]MapEdge{{"web", "orders", 1, Safe}}, nil)
+	if !strings.Contains(src, "n0 -> n1") || strings.Contains(src, "web ->") || strings.Contains(src, `"web" ->`) {
+		t.Errorf("names used as ids:\n%s", src)
+	}
+}
+
+// A map too large to lay out quickly is omitted: too many parties, or too many arrows between few parties.
+func TestSystemMapCap(t *testing.T) {
+	var wide []MapEdge // one caller, many services
+	for i := 0; i < maxMapParties; i++ {
+		wide = append(wide, MapEdge{Consumer: "web", Provider: fmt.Sprintf("svc%d", i), Operations: 1})
+	}
+	if !mapTooBig(wide) || mapTooBig(wide[:maxMapParties-1]) {
+		t.Errorf("party cap: %d parties too big = %v, %d parties too big = %v",
+			mapParties(wide), mapTooBig(wide), mapParties(wide[:maxMapParties-1]), mapTooBig(wide[:maxMapParties-1]))
+	}
+	var dense []MapEdge // few parties, every one calling every other
+	for i := 0; i < 10; i++ {
+		for j := 0; j < 10; j++ {
+			dense = append(dense, MapEdge{Consumer: fmt.Sprintf("c%d", i), Provider: fmt.Sprintf("p%d", j), Operations: 1})
+		}
+	}
+	if mapParties(dense) > maxMapParties || !mapTooBig(dense) || mapTooBig(dense[:maxMapEdges]) {
+		t.Errorf("arrow cap: %d arrows among %d parties too big = %v", len(dense), mapParties(dense), mapTooBig(dense))
+	}
+	// The largest map still drawn must lay out quickly; it runs under the diagram lock.
+	start := time.Now()
+	if _, err := renderSVG(mapD2(dense[:maxMapEdges], nil)); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("a map at the arrow cap took %s to lay out", d)
+	} else {
+		t.Logf("map at the arrow cap (%d arrows, %d parties): %s", maxMapEdges, mapParties(dense[:maxMapEdges]), d.Round(time.Millisecond))
 	}
 }
