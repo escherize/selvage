@@ -270,11 +270,10 @@ func check(l Layout, base, head Ref, asJSON, failUncovered bool) int {
 			fmt.Printf("%-8s %s:%d %s -> %s %s: %s\n", f.Verdict, e.Flow, e.Line, e.Consumer, e.Provider, e.Operation, f.Text)
 		}
 	}
-	for _, u := range r.Uncovered {
-		if !failUncovered { // text mode reports coverage only when asked to gate on it
-			break
+	if failUncovered { // text mode reports coverage only when asked to gate on it
+		for _, u := range r.Uncovered {
+			fmt.Printf("uncovered %s %s %s %s: no flow calls this operation\n", u.Service, u.Method, u.Path, u.Operation)
 		}
-		fmt.Printf("uncovered %s %s %s %s: no flow calls this operation\n", u.Service, u.Method, u.Path, u.Operation)
 	}
 	if r.Exit == 0 {
 		fmt.Printf("ok: %d flow edges compatible between %s and %s\n", len(r.Edges), r.Base, r.Head)

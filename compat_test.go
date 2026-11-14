@@ -955,7 +955,7 @@ func TestCheckJSON(t *testing.T) {
 	// Nothing to check is exit 2 with an error, and empty arrays rather than null.
 	r = runCheck(Layout{Repo: dir, Specs: "specs", Flows: "nowhere", Config: "selvage.yaml"}, ParseRef("HEAD", ""), Ref{}, false)
 	data, _ = json.Marshal(r)
-	if r.Exit != 2 || r.Error == "" || !strings.Contains(string(data), `"edges":[]`) || !strings.Contains(string(data), `"errors":[]`) {
+	if r.Exit != 2 || r.Error == "" || !strings.Contains(string(data), `"edges":[]`) || !strings.Contains(string(data), `"errors":[]`) || !strings.Contains(string(data), `"uncovered":[]`) {
 		t.Errorf("exit-2 report: %s", data)
 	}
 }
