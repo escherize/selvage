@@ -25,6 +25,9 @@ const usage = `selvage - API contract viewer
       browse specs, flows and diffs
   selvage check [layout flags] -base REV [-base-view V] [-head REV] [-head-view V]
       exit 1 if any flow edge breaks; head defaults to the working tree
+      -fail-uncovered also exits 1 when an operation has no flow
+  selvage coverage [layout flags] [-head REV] [-head-view V] [-fail-uncovered]
+      list each operation and the flows that call it; an operation with no flow has no checked consumer
   selvage export [layout flags] -out DIR [-base REV] [-base-view V] [-head REV] [-head-view V]
       write every page for one base/head comparison as a static site; base defaults to HEAD
 
@@ -48,6 +51,7 @@ func main() {
 	head := fl.String("head", "", "head git revision (empty = working tree)")
 	headView := fl.String("head-view", "", "x-status values to keep in head (empty = all)")
 	out := fl.String("out", "", "export: output directory")
+	failUncovered := fl.Bool("fail-uncovered", false, "check, coverage: exit 1 when an operation has no flow")
 	fl.Parse(os.Args[2:])
 	if l.Repo == "" || l.Specs == "" || l.Flows == "" || l.Config == "" {
 		fmt.Fprintln(os.Stderr, "-repo, -specs, -flows and -config must not be empty")
@@ -63,7 +67,9 @@ func main() {
 			fmt.Fprintln(os.Stderr, "check: -base is required")
 			os.Exit(2)
 		}
-		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView)))
+		os.Exit(check(l, ParseRef(*base, *baseView), ParseRef(*head, *headView), *failUncovered))
+	case "coverage":
+		os.Exit(coverageReport(l, ParseRef(*head, *headView), *failUncovered))
 	case "export":
 		if *out == "" {
 			fmt.Fprintln(os.Stderr, "export: -out is required")
@@ -118,7 +124,41 @@ func compare(l Layout, baseRef, headRef Ref) (comparison, error) {
 	return c, nil
 }
 
-func check(l Layout, base, head Ref) int {
+// coverageReport prints every operation with the flows that call it.
+func coverageReport(l Layout, head Ref, failUncovered bool) int {
+	snap, err := LoadSnapshot(l, head)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	for _, e := range snap.Errs {
+		fmt.Printf("ERROR    %s\n", e)
+	}
+	cs := Coverage(snap)
+	if len(cs) == 0 { // a mistyped -specs finds nothing; that must not read as full coverage
+		fmt.Fprintf(os.Stderr, "coverage: found no operations in %s at %s\n", l.Specs, snap.Label())
+		return 2
+	}
+	for _, c := range cs {
+		state := "covered"
+		if len(c.Flows) == 0 {
+			state = "uncovered"
+		}
+		fmt.Printf("%-9s %s %s %s %s", state, c.Service, c.Op.Method, c.Op.Path, c.Op.ID)
+		if len(c.Flows) > 0 {
+			fmt.Printf(" (%s)", strings.Join(c.Flows, ", "))
+		}
+		fmt.Println()
+	}
+	missing := len(uncovered(cs))
+	fmt.Printf("%d of %d operations have a flow at %s\n", len(cs)-missing, len(cs), snap.Label())
+	if len(snap.Errs) > 0 || (failUncovered && missing > 0) {
+		return 1
+	}
+	return 0
+}
+
+func check(l Layout, base, head Ref, failUncovered bool) int {
 	c, err := compare(l, base, head)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -137,7 +177,14 @@ func check(l Layout, base, head Ref) int {
 			fmt.Printf("%-8s %s:%d %s -> %s %s: %s\n", f.Verdict, e.Flow, e.Step.Line, e.Step.Consumer, e.Step.Provider, e.Step.OperationID, f.Text)
 		}
 	}
-	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking {
+	missing := 0
+	if failUncovered {
+		for _, u := range uncovered(Coverage(c.Head)) {
+			fmt.Printf("uncovered %s %s %s %s: no flow calls this operation\n", u.Service, u.Op.Method, u.Op.Path, u.Op.ID)
+			missing++
+		}
+	}
+	if len(c.Head.Errs) > 0 || worst(c.Edges) == Breaking || missing > 0 {
 		return 1
 	}
 	fmt.Printf("ok: %d flow edges compatible between %s and %s\n", len(c.Edges), c.Base.Label(), c.Head.Label())
@@ -216,7 +263,7 @@ func routes(l Layout) http.Handler {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		render(w, r, "index.html", "", map[string]any{"Snap": snap, "Query": template.URL(r.URL.RawQuery)})
+		render(w, r, "index.html", "", map[string]any{"Snap": snap, "Uncovered": uncovered(Coverage(snap)), "Query": template.URL(r.URL.RawQuery)})
 	})
 
 	spec := func(w http.ResponseWriter, r *http.Request) {

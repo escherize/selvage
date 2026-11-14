@@ -12,5 +12,14 @@
     <ul>{{range .Flows}}<li><a href="/flow/{{.Name}}?{{$.Query}}">{{.Title}}</a> <span class="muted">{{len .Steps}} steps</span></li>{{end}}</ul>
   </div>
 </section>
+{{with $.Uncovered}}
+<h2>Operations no flow calls</h2>
+<p class="muted">No check judges these against a real consumer. Add a flow step, or remove the operation.</p>
+<table class="steps">
+  <tr><th>service</th><th>operation</th><th>path</th></tr>
+  {{range .}}<tr><td>{{.Service}}</td><td><a href="/spec/{{.Service}}/op/{{.Op.ID}}?{{$.Query}}">{{.Op.ID}}</a></td><td><span class="m m-{{.Op.Method}}">{{.Op.Method}}</span> <code>{{.Op.Path}}</code></td></tr>
+  {{end}}
+</table>
+{{end}}
 {{end}}
 {{end}}
