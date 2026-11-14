@@ -1241,3 +1241,64 @@ func TestIndexRows(t *testing.T) {
 		t.Errorf("services:\n got %+v\nwant %+v", svc, wantSvc)
 	}
 }
+
+// The verdict on a row is the worst of its steps, not the last, and an uncalled service has none.
+func TestIndexRowVerdicts(t *testing.T) {
+	step := func(flow, consumer, provider string, v Verdict) EdgeResult {
+		return EdgeResult{Flow: flow, Step: Step{Consumer: consumer, Provider: provider, OperationID: "op"}, Verdict: v}
+	}
+	flows := []Flow{{Name: "f", Title: "F"}, {Name: "g", Title: "g"}, {Name: "h", Title: "H"}}
+	results := []EdgeResult{
+		step("f", "web", "orders", Breaking), step("f", "web", "pay", Safe), // worst first, then safe
+		step("g", "web", "pay", Safe), step("g", "web", "pay", Risky), step("g", "web", "orders", Safe),
+		step("h", "web", "orders", Safe),
+	}
+	var got []string
+	for _, r := range FlowRows(flows, results) {
+		got = append(got, r.Flow.Title+"="+r.Verdict.String())
+	}
+	// breaking, then risky, then safe; titles compare without case ("g" before "H" would need it)
+	if want := []string{"F=breaking", "g=risky", "H=safe"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("flow verdicts: got %v, want %v", got, want)
+	}
+	cov := []OpCoverage{{Service: "orders", Flows: []string{"f"}}, {Service: "pay", Flows: []string{"f"}}, {Service: "idle"}}
+	verdicts := map[string]Verdict{}
+	for _, r := range ServiceRows(cov, results) {
+		verdicts[r.Name] = r.Verdict
+	}
+	if want := map[string]Verdict{"orders": Breaking, "pay": Risky, "idle": Safe}; !reflect.DeepEqual(verdicts, want) {
+		t.Errorf("service verdicts: got %v, want %v", verdicts, want)
+	}
+	// Case-insensitive title order among equal verdicts.
+	rows := FlowRows([]Flow{{Name: "a", Title: "banana"}, {Name: "b", Title: "Apple"}, {Name: "c", Title: "cherry"}}, nil)
+	if rows[0].Flow.Title != "Apple" || rows[1].Flow.Title != "banana" {
+		t.Errorf("title order: %s, %s, %s", rows[0].Flow.Title, rows[1].Flow.Title, rows[2].Flow.Title)
+	}
+}
+
+// On the page, a service nobody calls says so and gets no verdict badge.
+func TestIndexUncalledService(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "specs"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "flows"), 0o755)
+	spec := "openapi: 3.0.3\ninfo: {title: t, version: \"1\"}\npaths:\n  /a: {get: {operationId: getA, responses: {\"200\": {description: ok}}}}\n"
+	os.WriteFile(filepath.Join(dir, "specs", "used.yaml"), []byte(spec), 0o644)
+	os.WriteFile(filepath.Join(dir, "specs", "idle.yaml"), []byte(spec), 0o644)
+	os.WriteFile(filepath.Join(dir, "flows", "f.flow"), []byte("web -> used: getA\n"), 0o644)
+	rec := httptest.NewRecorder()
+	routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	body := rec.Body.String()
+	row := func(svc string) string {
+		i := strings.Index(body, `>`+svc+`</a></td>`)
+		if i < 0 {
+			t.Fatalf("no row for %s", svc)
+		}
+		return body[i : i+strings.Index(body[i:], "</tr>")]
+	}
+	if r := row("idle"); !strings.Contains(r, "no flow calls it") || !strings.Contains(r, "not checked") || strings.Contains(r, "badge") {
+		t.Errorf("idle row: %s", r)
+	}
+	if r := row("used"); !strings.Contains(r, `badge v-safe`) || !strings.Contains(r, "1 of 1") {
+		t.Errorf("used row: %s", r)
+	}
+}

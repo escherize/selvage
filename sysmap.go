@@ -149,7 +149,7 @@ func FlowRows(flows []Flow, results []EdgeResult) []FlowRow {
 		if rows[i].Verdict != rows[j].Verdict {
 			return rows[i].Verdict > rows[j].Verdict
 		}
-		return rows[i].Flow.Title < rows[j].Flow.Title
+		return strings.ToLower(rows[i].Flow.Title) < strings.ToLower(rows[j].Flow.Title)
 	})
 	return rows
 }

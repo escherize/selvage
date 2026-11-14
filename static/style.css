@@ -46,6 +46,8 @@ ul.schema { padding-left: 0; border: 0; }
 
 table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1.5rem; }
 th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.wrap { overflow-wrap: anywhere; } /* free text from repo files: a long unbroken title or name must not widen the page */
+.badge { white-space: nowrap; }
 .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 th { font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 .revs { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
@@ -71,6 +73,9 @@ figure.diagram { margin-left: 0; margin-right: 0; }
 @media (max-width: 480px) {
   .wide { display: none; } /* columns a narrow screen can do without */
   th, td { padding: 0.4rem 0.4rem; }
+}
+@media (max-width: 360px) {
+  .wider { display: none; } /* and one more on the narrowest phones, so words are not broken to fit */
 }
 @media (max-width: 700px) {
   .map svg { max-width: none; } /* keep the map at its drawn size and scroll the box, so labels stay readable */
