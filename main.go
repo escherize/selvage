@@ -410,6 +410,7 @@ func routes(l Layout) http.Handler {
 			}
 		}
 		data["Failing"], data["Risky"] = failing, risky
+		data["FlowRows"], data["ServiceRows"] = FlowRows(snap.Flows, results), ServiceRows(cov, results)
 		edges := SystemMap(results)
 		if mapTooBig(edges) {
 			data["MapOmitted"] = fmt.Sprintf("%d parties and %d arrows", mapParties(edges), len(edges))

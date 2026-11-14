@@ -16,16 +16,30 @@
   <figcaption>Who calls what. An arrow is every call one party makes to a service, across all flows. Its color is the worst verdict among those calls. A dashed box is a party this contract has no spec for.</figcaption>
 </figure>
 {{end}}
-<section class="cards">
-  <div class="card">
-    <h2 id="services">Services</h2>
-    <ul>{{range .Services}}<li><a href="/spec/{{.}}?{{$.Query}}">{{.}}</a></li>{{end}}</ul>
-  </div>
-  <div class="card">
-    <h2 id="flows">Flows</h2>
-    <ul>{{range .Flows}}<li><a href="/flow/{{.Name}}?{{$.NavDiff}}">{{.Title}}</a> <span class="muted">{{len .Steps}} steps</span></li>{{end}}</ul>
-  </div>
-</section>
+<h2 id="flows">Flows</h2>
+<table class="steps">
+  <tr><th>flow</th><th>who calls what</th><th class="wide">steps</th><th>verdict</th></tr>
+  {{range $.FlowRows}}<tr>
+    <td class="wrap"><a href="/flow/{{.Flow.Name}}?{{$.NavDiff}}">{{.Flow.Title}}</a></td>
+    <td class="wrap">{{range .Calls}}<div>{{.}}</div>{{end}}</td>
+    <td class="wide num">{{len .Flow.Steps}}</td>
+    <td><span class="badge v-{{.Verdict}}">{{.Verdict}}</span></td>
+  </tr>
+  {{else}}<tr><td colspan="4" class="muted">{{if $.Snap.Errs}}No flow could be read. See the errors at the top of the page.{{else}}No flows yet. Add a <code>.flow</code> file to describe who calls what.{{end}}</td></tr>
+  {{end}}
+</table>
+<h2 id="services">Services</h2>
+<table class="steps">
+  <tr><th>service</th><th class="wider">called by</th><th title="operations that at least one flow calls">covered</th><th>verdict</th></tr>
+  {{range $.ServiceRows}}<tr>
+    <td class="wrap"><a href="/spec/{{.Name}}?{{$.NavIndex}}">{{.Name}}</a></td>
+    <td class="wider wrap">{{range $i, $c := .Callers}}{{if $i}}, {{end}}{{$c}}{{else}}<span class="muted">no flow calls it</span>{{end}}</td>
+    <td class="num">{{.Covered}} of {{.Operations}}</td>
+    <td>{{if .Callers}}<span class="badge v-{{.Verdict}}">{{.Verdict}}</span>{{else}}<span class="muted">not checked</span>{{end}}</td>
+  </tr>
+  {{else}}<tr><td colspan="4" class="muted">{{if $.Snap.Errs}}No spec could be read. See the errors at the top of the page.{{else}}No specs found.{{end}}</td></tr>
+  {{end}}
+</table>
 {{with $.Uncovered}}
 <h2>Operations no flow calls</h2>
 <p class="muted">No check judges these against a real consumer. Add a flow step, or remove the operation.</p>
