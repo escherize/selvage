@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -269,6 +270,16 @@ func routes(l Layout) http.Handler {
 			return
 		}
 		data["Snap"], data["Flow"] = snap, f
+		// Link each step to its operation in the same view as this page. An
+		// operation the view lacks has no page there, so it is not linked.
+		known := map[string]bool{}
+		for _, s := range f.Steps {
+			if spec, ok := snap.Specs[s.Provider]; ok {
+				_, known[s.Provider+" "+s.OperationID] = findOp(spec.Spec, s.OperationID)
+			}
+		}
+		data["Known"] = known
+		data["SpecQuery"] = template.URL(url.Values{"rev": {head.Rev}, "view": {head.ViewString()}}.Encode())
 		var results []EdgeResult
 		if cerr == nil {
 			for _, e := range c.Edges {
