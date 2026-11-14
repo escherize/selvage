@@ -9,7 +9,7 @@
   </div>
   <div class="card">
     <h2 id="flows">Flows</h2>
-    <ul>{{range .Flows}}<li><a href="/flow/{{.Name}}?{{$.Query}}">{{.Title}}</a> <span class="muted">{{len .Steps}} steps</span></li>{{end}}</ul>
+    <ul>{{range .Flows}}<li><a href="/flow/{{.Name}}?{{$.NavDiff}}">{{.Title}}</a> <span class="muted">{{len .Steps}} steps</span></li>{{end}}</ul>
   </div>
 </section>
 {{with $.Uncovered}}

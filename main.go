@@ -332,17 +332,22 @@ func render(w http.ResponseWriter, r *http.Request, page, fragment string, data 
 }
 
 // nav fills in what the header needs: the active section, and links that keep
-// the revision and view the page is showing. base is nil on pages that show
-// one state (index, spec); the Changes link then compares against the default base.
+// the revision and view the page is showing.
+//
+// NavIndex is the query for pages that show one state (index, spec). NavDiff
+// is the query for pages that compare (flow, diff). base is nil on a page that
+// shows one state; the comparison it links to is then HEAD against that state
+// in the same view, so the view's own filtering is not reported as a change.
 func nav(data map[string]any, section string, head Ref, base *Ref) map[string]any {
+	if base == nil {
+		base = &Ref{Rev: "HEAD", View: head.View}
+	}
 	data["Section"] = section
 	data["NavIndex"] = template.URL(url.Values{"rev": {head.Rev}, "view": {head.ViewString()}}.Encode())
-	q := url.Values{"head": {head.Rev}, "head_view": {head.ViewString()}}
-	if base != nil {
-		q.Set("base", base.Rev)
-		q.Set("base_view", base.ViewString())
-	}
-	data["NavDiff"] = template.URL(q.Encode())
+	data["NavDiff"] = template.URL(url.Values{
+		"base": {base.Rev}, "base_view": {base.ViewString()},
+		"head": {head.Rev}, "head_view": {head.ViewString()},
+	}.Encode())
 	return data
 }
 
@@ -458,7 +463,7 @@ func routes(l Layout) http.Handler {
 		} else {
 			data["C"], data["Worst"], data["Snap"] = c, worst(c.Edges), c.Head
 		}
-		render(w, r, "diff.html", "results", nav(data, "changes", head, &base))
+		render(w, r, "diff.html", "", nav(data, "changes", head, &base))
 	})
 	return mux
 }

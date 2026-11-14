@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1>Compatibility</h1>
-<form class="revs" hx-get="/diff" hx-target="#results" hx-push-url="true">{{template "refs" .}}</form>
+<form class="revs" action="/diff">{{template "refs" .}}</form>
 <div id="results">{{template "results" .}}</div>
 {{end}}
 
