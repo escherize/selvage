@@ -14,7 +14,7 @@
   {{else if .Head.Errs}}<span class="badge v-breaking">Incomplete</span> some files failed to load (above). No call breaks among the {{len .Edges}} that were checked
   {{else}}<span class="badge v-safe">No call breaks</span> out of {{len .Edges}}
   {{end}}going from {{.Base.Ref.Plain}} to {{.Head.Ref.Plain}}.
-  <span class="reflabel">{{.Base.Label}} &rarr; {{.Head.Label}}</span></p>
+  <span class="reflabel">({{.Base.Label}} &rarr; {{.Head.Label}})</span></p>
 
 {{with $.Problems}}
 <h2>Calls with problems</h2>
