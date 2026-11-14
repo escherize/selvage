@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http/httptest"
 	"os"
@@ -979,6 +980,44 @@ func TestCheckJSONUncovered(t *testing.T) {
 	for _, u := range r.Uncovered {
 		if u.Operation == "chargeCard" || u.Service == "" || u.Method == "" || u.Path == "" {
 			t.Errorf("bad uncovered entry %+v", u)
+		}
+	}
+}
+
+// The header has four fixed links however many flows exist, and they keep the page's view.
+func TestHeaderIsFixed(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "specs"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "flows"), 0o755)
+	os.WriteFile(filepath.Join(dir, "specs", "svc.yaml"), []byte(`
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /a: {get: {operationId: getA, responses: {"200": {description: ok}}}}
+`), 0o644)
+	for i := 0; i < 30; i++ {
+		os.WriteFile(filepath.Join(dir, "flows", fmt.Sprintf("f%02d.flow", i)), []byte("web -> svc: getA\n"), 0o644)
+	}
+	nav := regexp.MustCompile(`(?s)<nav.*?</nav>`)
+	for target, current := range map[string]string{
+		"/?view=master":                         "Overview",
+		"/spec/svc?view=master":                 "Services",
+		"/flow/f07?head_view=master":            "Flows",
+		"/diff?head_view=master&base_view=main": "Changes",
+	} {
+		rec := httptest.NewRecorder()
+		routes(layoutOf(dir)).ServeHTTP(rec, httptest.NewRequest("GET", target, nil))
+		got := nav.FindString(rec.Body.String())
+		if n := strings.Count(got, "<a "); n != 4 {
+			t.Errorf("%s: header has %d links, want 4", target, n)
+		}
+		if !regexp.MustCompile(`aria-current="[a-z]+">`+current+`<`).MatchString(got) || strings.Count(got, "aria-current") != 1 {
+			t.Errorf("%s: want only %s marked current in %s", target, current, got)
+		}
+		for _, want := range []string{`href="/?rev=&amp;view=master"`, `href="/?rev=&amp;view=master#flows"`, `head_view=master`} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: header lost the view, want %s", target, want)
+			}
 		}
 	}
 }

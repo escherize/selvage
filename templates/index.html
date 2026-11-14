@@ -4,11 +4,11 @@
 {{template "errs" .Errs}}
 <section class="cards">
   <div class="card">
-    <h2>Services</h2>
+    <h2 id="services">Services</h2>
     <ul>{{range .Services}}<li><a href="/spec/{{.}}?{{$.Query}}">{{.}}</a></li>{{end}}</ul>
   </div>
   <div class="card">
-    <h2>Flows</h2>
+    <h2 id="flows">Flows</h2>
     <ul>{{range .Flows}}<li><a href="/flow/{{.Name}}?{{$.Query}}">{{.Title}}</a> <span class="muted">{{len .Steps}} steps</span></li>{{end}}</ul>
   </div>
 </section>
